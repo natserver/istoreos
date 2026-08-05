@@ -1,117 +1,80 @@
-iStoreOS 是入门级的路由系统，也是入门级的 NAS 系统，
-基于原版 OpenWRT，在 ARS2 上经过长期迭代，最终开放适配到多个硬件平台
+# iStoreOS for 京东云亚瑟 AX1800 Pro（RE-SS-01）
 
-更多信息请参阅 https://github.com/istoreos
+基于 [iStoreOS](https://github.com/istoreos) `25.12` 分支，针对 **京东云亚瑟 AX1800 Pro（内部型号 RE-SS-01，Qualcomm IPQ6000，eMMC 存储）** 适配的独立构建仓库。
 
+本仓库通过 GitHub Actions 自动编译该机型的 iStoreOS 固件，产物为 `factory.bin`（首次刷入）与 `sysupgrade.bin`（升级）。
 
-以下是 OpenWRT 原始的 README
---------
+## 支持设备
 
-![OpenWrt logo](include/logo.png)
+| 项目 | 说明 |
+| --- | --- |
+| 设备名 | 京东云亚瑟 AX1800 Pro |
+| 内部型号 | JDCloud RE-SS-01 |
+| SoC | Qualcomm IPQ6000（四核 ARM Cortex-A53） |
+| 内存 | 512 MB |
+| 存储 | eMMC（本板无 NAND） |
+| 无线 | 2.4G + 5G（QCA 方案） |
+| OpenWrt 设备标识 | `jdcloud_re-ss-01` |
+| 目标子架构 | `qualcommax / ipq60xx` |
 
-OpenWrt Project is a Linux operating system targeting embedded devices. Instead
-of trying to create a single, static firmware, OpenWrt provides a fully
-writable filesystem with package management. This frees you from the
-application selection and configuration provided by the vendor and allows you
-to customize the device through the use of packages to suit any application.
-For developers, OpenWrt is the framework to build an application without having
-to build a complete firmware around it; for users this means the ability for
-full customization, to use the device in ways never envisioned.
+## 自动构建（GitHub Actions）
 
-Sunshine!
+根目录的 `.github/workflows/build-ax1800pro.yml` 会在推送到 `istoreos-25.12` 分支时自动编译，产物以 **Artifact** 形式上传（名称 `istoreos-jdcloud-re-ss-01`），包含：
 
-## Download
+- `istoreos-qualcommax-ipq60xx-jdcloud_re-ss-01-squashfs-factory.bin`
+- `istoreos-qualcommax-ipq60xx-jdcloud_re-ss-01-squashfs-sysupgrade.bin`
+- 对应的 `.manifest`
 
-Built firmware images are available for many architectures and come with a
-package selection to be used as WiFi home router. To quickly find a factory
-image usable to migrate from a vendor stock firmware to OpenWrt, try the
-*Firmware Selector*.
+> 内核已按本机型的双启动 GPT 编译为 **12 MiB（`KERNEL_SIZE=12288k`）**，需配合下方分区表与 U-Boot 恢复端点使用。
 
-* [OpenWrt Firmware Selector](https://firmware-selector.openwrt.org/)
+## 刷机方法
 
-If your device is supported, please follow the **Info** link to see install
-instructions or consult the support resources listed below.
+### 0. 准备
 
-## 
+- 一张双启动分区表镜像（社区常用 `gpt-JDC_AX1800_Pro_dual-boot_rootfs2048M_HLOS12M_no-last-partition.bin`，其 HLOS 分区为 12M）。
+- 进入 U-Boot Web 恢复模式（通常断电状态下按住复位键上电，待指示灯变化后松开；电脑网线接 LAN 口，设置静态 IP `192.168.1.x`）。
 
-An advanced user may require additional or specific package. (Toolchain, SDK, ...) For everything else than simple firmware download, try the wiki download page:
+### 1. 写入分区表
 
-* [OpenWrt Wiki Download](https://openwrt.org/downloads)
+在 U-Boot Web 界面先上传并写入上面的 GPT 镜像，使 eMMC 具备 12M 的 HLOS 分区。
 
-## Development
+### 2. 刷入 factory.bin
 
-To build your own firmware you need a GNU/Linux, BSD or macOS system (case
-sensitive filesystem required). Cygwin is unsupported because of the lack of a
-case sensitive file system.
+继续在 U-Boot Web 中通过 **`/big.html`** 端点（12M 内核专用）上传 `factory.bin` 写入。写入完成后断电重启。
 
-### Requirements
+> ⚠️ 本机型因使用 12M HLOS 分区，必须使用 `/big.html` 端点；`/` 端点适用于 6M 内核，与本 GPT 不匹配，强行使用会导致无法启动（红灯）。
 
-You need the following tools to compile OpenWrt, the package names vary between
-distributions. A complete list with distribution specific packages is found in
-the [Build System Setup](https://openwrt.org/docs/guide-developer/build-system/install-buildsystem)
-documentation.
+### 3. 后续升级
 
+已进入系统后，升级使用 `sysupgrade.bin`（Web 界面或 `sysupgrade` 命令）。
+
+## 关键适配点（排查记录）
+
+- **eMMC 控制器**：RE-SS-01 的 eMMC 接在 SDC1，设备树中对应 `&sdhc_1`；若误配在 `&sdhc`（SDC2 / SD 卡槽），内核会找不到 eMMC，卡在 `Waiting for root device` 后看门狗复位（红灯）。已修正为 `&sdhc_1` 并禁用 `&sdhc`。
+- **12M 内核**：因刷入的是 `HLOS12M` GPT，内核须 pad 到 12M 并走 `/big.html` 端点，否则 rootfs 偏移落在 HLOS 分区边界外。
+- **cmdline**：`/chosen` 显式设置 `bootargs`，保证控制台与根设备正确挂载。
+
+## 本地编译（可选）
+
+需要大小写敏感的文件系统（Linux / macOS / WSL）。
+
+```bash
+./scripts/feeds update -a
+./scripts/feeds install -a
+make menuconfig        # Target: Qualcommax/IPQ60xx，勾选 jdcloud_re-ss-01
+make -j$(nproc)
 ```
-binutils bzip2 diff find flex gawk gcc-6+ getopt grep install libc-dev libz-dev
-make4.1+ perl python3.7+ rsync subversion unzip which
-```
 
-### Quickstart
+编译产物位于 `bin/targets/qualcommax/ipq60xx/`。
 
-1. Run `./scripts/feeds update -a` to obtain all the latest package definitions
-   defined in feeds.conf / feeds.conf.default
+## 分支说明
 
-2. Run `./scripts/feeds install -a` to install symlinks for all obtained
-   packages into package/feeds/
+- `istoreos-25.12`：默认分支，本机型的适配与构建分支。
 
-3. Run `make menuconfig` to select your preferred configuration for the
-   toolchain, target system & firmware packages.
+## 免责声明
 
-4. Run `make` to build your firmware. This will download all sources, build the
-   cross-compile toolchain and then cross-compile the GNU/Linux kernel & all chosen
-   applications for your target system.
+刷机有风险，操作前请备份原厂固件与分区表。本仓库仅供学习研究，作者不对任何刷机导致的设备损坏负责。
 
-### Related Repositories
+## 许可证
 
-The main repository uses multiple sub-repositories to manage packages of
-different categories. All packages are installed via the OpenWrt package
-manager called `opkg`. If you're looking to develop the web interface or port
-packages to OpenWrt, please find the fitting repository below.
-
-* [LuCI Web Interface](https://github.com/openwrt/luci): Modern and modular
-  interface to control the device via a web browser.
-
-* [OpenWrt Packages](https://github.com/openwrt/packages): Community repository
-  of ported packages.
-
-* [OpenWrt Routing](https://github.com/openwrt/routing): Packages specifically
-  focused on (mesh) routing.
-
-* [OpenWrt Video](https://github.com/openwrt/video): Packages specifically
-  focused on display servers and clients (Xorg and Wayland).
-
-## Support Information
-
-For a list of supported devices see the [OpenWrt Hardware Database](https://openwrt.org/supported_devices)
-
-### Documentation
-
-* [Quick Start Guide](https://openwrt.org/docs/guide-quick-start/start)
-* [User Guide](https://openwrt.org/docs/guide-user/start)
-* [Developer Documentation](https://openwrt.org/docs/guide-developer/start)
-* [Technical Reference](https://openwrt.org/docs/techref/start)
-
-### Support Community
-
-* [Forum](https://forum.openwrt.org): For usage, projects, discussions and hardware advise.
-* [Support Chat](https://webchat.oftc.net/#openwrt): Channel `#openwrt` on **oftc.net**.
-
-### Developer Community
-
-* [Bug Reports](https://bugs.openwrt.org): Report bugs in OpenWrt
-* [Dev Mailing List](https://lists.openwrt.org/mailman/listinfo/openwrt-devel): Send patches
-* [Dev Chat](https://webchat.oftc.net/#openwrt-devel): Channel `#openwrt-devel` on **oftc.net**.
-
-## License
-
-OpenWrt is licensed under GPL-2.0
+基于 iStoreOS / OpenWrt，遵循 **GPL-2.0**。
