@@ -9,6 +9,8 @@ on:
       - 'target/linux/qualcommax/**'
       - 'package/firmware/ipq-wifi/**'
       - 'package/boot/uboot-tools/**'
+      - 'package/network/**'
+      - 'package/libs/libnftnl/**'
       - '.github/workflows/build-ax1800pro.yml'
 
 env:
