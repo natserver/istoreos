@@ -12,8 +12,6 @@ on:
       - '.github/workflows/build-ax1800pro.yml'
 
 env:
-  REPO_URL: https://github.com/natserver/istoreos.git
-  REPO_BRANCH: istoreos-25.12
   DEVICE_TARGET: qualcommax/ipq60xx
   DEVICE_PROFILE: jdcloud_re-ss-01
   TZ: Asia/Shanghai
@@ -27,103 +25,122 @@ jobs:
       - name: 检出代码 (Checkout)
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.REPO_BRANCH }}
           fetch-depth: 1
 
       - name: 释放磁盘空间 (Free disk space)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          sudo apt-get clean
+          echo "::group::清理前"
           df -hT /
+          echo "::endgroup::"
+          sudo rm -rf \
+            /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/graalvm /usr/local/.ghcup \
+            /usr/local/share/powershell /usr/local/share/chromium \
+            /usr/local/lib/node_modules /opt/az /usr/share/swift || true
+          sudo docker image prune --all --force || true
+          sudo apt-get clean || true
+          echo "::group::清理后"
+          df -hT /
+          echo "::endgroup::"
 
-      - name: 创建交换分区 (Create swap to avoid OOM)
+      # runner 自带 /swapfile 且已启用，必须换路径；失败也不应中断构建
+      - name: 创建交换分区 (Create swap, best-effort)
+        continue-on-error: true
         run: |
-          sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          set +e
+          SWAPFILE=/mnt/openwrt-swap
+          sudo rm -f "$SWAPFILE"
+          sudo fallocate -l 8G "$SWAPFILE" || sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=8192
+          sudo chmod 600 "$SWAPFILE"
+          sudo mkswap "$SWAPFILE"
+          sudo swapon "$SWAPFILE"
           free -h
+          exit 0
 
       - name: 安装编译依赖 (Install build dependencies)
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses5-dev libssl-dev python3 python3-pip python3-setuptools python3-dev \
-            rsync unzip zlib1g-dev file wget subversion patch vim-common quilt asciidoc \
-            autoconf automake libtool-bin ccache libltdl-dev libglib2.0-dev \
-            libgmp-dev libmpfr-dev libmpc-dev libelf-dev
+            gettext git libncurses-dev libssl-dev python3 python3-pip \
+            python3-setuptools python3-dev rsync unzip zlib1g-dev file wget \
+            subversion patch vim-common quilt asciidoc autoconf automake \
+            libtool-bin ccache libltdl-dev libglib2.0-dev libgmp-dev \
+            libmpfr-dev libmpc-dev libelf-dev zstd
           sudo apt-get clean
-
-      - name: 配置 Git (Configure git)
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: 更新/安装 Feeds
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 生成seed配置 (Generate .config for JDCloud RE-SS-01)
+      - name: 生成 seed 配置 (Generate .config)
         run: |
           cat > .config <<'EOF'
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
           CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
           CONFIG_TARGET_ROOTFS_SQUASHFS=y
-          CONFIG_TARGET_IMAGES_GZIP=y
           CONFIG_KERNEL_BUILD_USER="natserver"
           CONFIG_KERNEL_BUILD_DOMAIN="istoreos"
-          # LuCI 基础
           CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-base=y
           CONFIG_PACKAGE_luci-app-firewall=y
-          CONFIG_PACKAGE_luci-app-opkg=y
           CONFIG_PACKAGE_luci-app-ttyd=y
-          CONFIG_PACKAGE_luci-app-upnp=y
-          CONFIG_PACKAGE_luci-app-samba4=y
-          CONFIG_PACKAGE_luci-app-sqm=y
-          CONFIG_PACKAGE_luci-app-wol=y
-          CONFIG_PACKAGE_luci-app-diskman=y
-          CONFIG_PACKAGE_luci-theme-argon=y
-          CONFIG_PACKAGE_luci-app-argon-config=y
-          # 网络/工具
-          CONFIG_PACKAGE_curl=y
-          CONFIG_PACKAGE_htop=y
-          CONFIG_PACKAGE_losetup=y
-          CONFIG_PACKAGE_e2fsprogs=y
           CONFIG_PACKAGE_block-mount=y
-          CONFIG_PACKAGE_kmod-usb3=y
+          CONFIG_PACKAGE_blkid=y
           CONFIG_PACKAGE_kmod-usb-storage=y
-          CONFIG_PACKAGE_kmod-fs-exfat=y
           CONFIG_PACKAGE_kmod-fs-vfat=y
-          CONFIG_PACKAGE_kmod-fs-ext4=y
+          CONFIG_PACKAGE_kmod-fs-exfat=y
           CONFIG_PACKAGE_kmod-fs-f2fs=y
           CONFIG_PACKAGE_mkf2fs=y
           CONFIG_PACKAGE_f2fsck=y
           EOF
 
-      - name: 展开默认配置 (make defconfig)
-        run: make defconfig
-
-      - name: 预下载 (make download)
+      - name: 展开默认配置并校验机型 (defconfig + verify)
         run: |
-          make download -j$(nproc) V=s || make download -j1 V=s
-          find dl -size -1024c -exec ls -l {} \;
+          make defconfig
+          echo "::group::最终生效的机型相关配置"
+          grep -E '^CONFIG_TARGET_(BOARD|SUBTARGET|PROFILE)|DEVICE_jdcloud' .config || true
+          echo "::endgroup::"
+          # 机型没被选中时立即失败，避免浪费数小时编译出错误固件
+          if ! grep -q '^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y' .config; then
+            echo "::error::机型 jdcloud_re-ss-01 未被选中，请检查设备定义与配置符号名"
+            echo "可用的 ipq60xx 机型符号："
+            grep -o 'TARGET_qualcommax_ipq60xx_DEVICE_[a-z0-9_.-]*' tmp/.config-target.in | sort -u || true
+            exit 1
+          fi
+          echo "机型已正确选中: jdcloud_re-ss-01"
+
+      - name: 预下载源码包 (make download)
+        run: |
+          set -o pipefail
+          make download -j8 || make download -j1 V=s
+          # 清掉下载不完整的文件后重试一次
+          find dl -size -1024c -type f -exec ls -l {} \; -exec rm -f {} \;
+          make download -j8 || true
 
       - name: 编译固件 (Build firmware)
         run: |
-          echo "开始编译 JDCloud RE-SS-01 ..."
-          make -j$(nproc) V=s 2>&1 | tee build.log || make -j1 V=s 2>&1 | tee build.log
+          set -o pipefail
+          echo "开始编译 JDCloud RE-SS-01, 并行度 $(nproc)"
+          if ! make -j"$(nproc)" 2>&1 | tee build.log; then
+            echo "::warning::并行编译失败，回退单线程 V=s 重试以获取完整错误信息"
+            make -j1 V=s 2>&1 | tee -a build.log
+          fi
 
       - name: 检查产物 (Check artifacts)
         run: |
-          echo "=== bin/targets/qualcommax/ipq60xx ==="
-          ls -lh bin/targets/qualcommax/ipq60xx/ 2>/dev/null || echo "NO OUTPUT"
-          echo "=== grep factory/sysupgrade ==="
-          ls bin/targets/qualcommax/ipq60xx/*jdcloud* 2>/dev/null || true
+          OUT=bin/targets/qualcommax/ipq60xx
+          echo "::group::产物列表"
+          ls -lh "$OUT" 2>/dev/null || echo "目录不存在"
+          echo "::endgroup::"
+          if ! ls "$OUT"/*jdcloud*sysupgrade* >/dev/null 2>&1; then
+            echo "::error::未生成 jdcloud sysupgrade 固件"
+            exit 1
+          fi
+          echo "固件生成成功："
+          ls -1 "$OUT"/*jdcloud*
 
       - name: 上传固件 (Upload firmware)
         uses: actions/upload-artifact@v4
