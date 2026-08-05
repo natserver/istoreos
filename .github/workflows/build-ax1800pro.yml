@@ -37,15 +37,23 @@ jobs:
           sudo apt-get clean
           df -hT /
 
+      - name: 创建交换分区 (Create swap to avoid OOM)
+        run: |
+          sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
       - name: 安装编译依赖 (Install build dependencies)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses5-dev libssl-dev python3 python3-pip python3-distutils \
+            gettext git libncurses5-dev libssl-dev python3 python3-pip python3-setuptools python3-dev \
             rsync unzip zlib1g-dev file wget subversion patch vim-common quilt asciidoc \
-            autoconf automake libtool-bin ccache ecj fastjar jar libltdl-dev libglib2.0-dev \
-            libgmp-dev libmpfr-dev libmpc-dev libelf-dev nodejs npm
+            autoconf automake libtool-bin ccache libltdl-dev libglib2.0-dev \
+            libgmp-dev libmpfr-dev libmpc-dev libelf-dev
           sudo apt-get clean
 
       - name: 配置 Git (Configure git)
@@ -64,7 +72,6 @@ jobs:
           CONFIG_TARGET_qualcommax=y
           CONFIG_TARGET_qualcommax_ipq60xx=y
           CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
-          CONFIG_TARGET_PER_DEVICE_ROOTFS=y
           CONFIG_TARGET_ROOTFS_SQUASHFS=y
           CONFIG_TARGET_IMAGES_GZIP=y
           CONFIG_KERNEL_BUILD_USER="natserver"
