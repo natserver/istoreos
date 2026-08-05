@@ -10,6 +10,15 @@ define Build/wax610-netgear-tar
 	rm -rf $@.tmp
 endef
 
+# Devices booting from eMMC: the factory image holds the bare rootfs which is
+# written into the "rootfs" GPT partition from U-Boot, while sysupgrade uses
+# the tar based mmc_do_upgrade() helper.
+define Device/EmmcImage
+	IMAGES += factory.bin sysupgrade.bin
+	IMAGE/factory.bin := append-rootfs | pad-rootfs | pad-to 64k
+	IMAGE/sysupgrade.bin/squashfs := append-rootfs | pad-to 64k | sysupgrade-tar rootfs=$$$$@ | append-metadata
+endef
+
 define Device/8devices_mango-dvk
 	$(call Device/FitImageLzma)
 	DEVICE_VENDOR := 8devices
@@ -75,6 +84,24 @@ define Device/glinet_gl-axt1800
 	SUPPORTED_DEVICES += glinet,axt1800
 endef
 TARGET_DEVICES += glinet_gl-axt1800
+
+define Device/jdcloud_re-ss-01
+	$(call Device/FitImage)
+	$(call Device/EmmcImage)
+	DEVICE_VENDOR := JDCloud
+	DEVICE_MODEL := RE-SS-01 (AX1800 Pro)
+	DEVICE_DTS := ipq6000-jdcloud-re-ss-01
+	DEVICE_DTS_CONFIG := config@cp03-c2
+	SOC := ipq6000
+	BLOCKSIZE := 64k
+	KERNEL_SIZE := 6144k
+	IMAGE/factory.bin := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-rootfs | append-metadata
+	DEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01 kmod-fs-ext4 e2fsprogs \
+		mkf2fs f2fsck kmod-fs-f2fs losetup blkid \
+		kmod-usb3 kmod-usb-dwc3-qcom kmod-usb-storage \
+		kmod-fs-vfat kmod-fs-exfat block-mount
+endef
+TARGET_DEVICES += jdcloud_re-ss-01
 
 define Device/linksys_mr
 	$(call Device/FitImage)

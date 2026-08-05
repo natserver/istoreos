@@ -1,0 +1,139 @@
+name: Build iStoreOS for JDCloud AX1800 Pro (RE-SS-01)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - istoreos-25.12
+    paths:
+      - 'target/linux/qualcommax/**'
+      - 'package/firmware/ipq-wifi/**'
+      - 'package/boot/uboot-tools/**'
+      - '.github/workflows/build-ax1800pro.yml'
+
+env:
+  REPO_URL: https://github.com/natserver/istoreos.git
+  REPO_BRANCH: istoreos-25.12
+  DEVICE_TARGET: qualcommax/ipq60xx
+  DEVICE_PROFILE: jdcloud_re-ss-01
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: 检出代码 (Checkout)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REPO_BRANCH }}
+          fetch-depth: 1
+
+      - name: 释放磁盘空间 (Free disk space)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo apt-get clean
+          df -hT /
+
+      - name: 安装编译依赖 (Install build dependencies)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3 python3-pip python3-distutils \
+            rsync unzip zlib1g-dev file wget subversion patch vim-common quilt asciidoc \
+            autoconf automake libtool-bin ccache ecj fastjar jar libltdl-dev libglib2.0-dev \
+            libgmp-dev libmpfr-dev libmpc-dev libelf-dev nodejs npm
+          sudo apt-get clean
+
+      - name: 配置 Git (Configure git)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 更新/安装 Feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 生成seed配置 (Generate .config for JDCloud RE-SS-01)
+        run: |
+          cat > .config <<'EOF'
+          CONFIG_TARGET_qualcommax=y
+          CONFIG_TARGET_qualcommax_ipq60xx=y
+          CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
+          CONFIG_TARGET_PER_DEVICE_ROOTFS=y
+          CONFIG_TARGET_ROOTFS_SQUASHFS=y
+          CONFIG_TARGET_IMAGES_GZIP=y
+          CONFIG_KERNEL_BUILD_USER="natserver"
+          CONFIG_KERNEL_BUILD_DOMAIN="istoreos"
+          # LuCI 基础
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-base=y
+          CONFIG_PACKAGE_luci-app-firewall=y
+          CONFIG_PACKAGE_luci-app-opkg=y
+          CONFIG_PACKAGE_luci-app-ttyd=y
+          CONFIG_PACKAGE_luci-app-upnp=y
+          CONFIG_PACKAGE_luci-app-samba4=y
+          CONFIG_PACKAGE_luci-app-sqm=y
+          CONFIG_PACKAGE_luci-app-wol=y
+          CONFIG_PACKAGE_luci-app-diskman=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+          CONFIG_PACKAGE_luci-app-argon-config=y
+          # 网络/工具
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_htop=y
+          CONFIG_PACKAGE_losetup=y
+          CONFIG_PACKAGE_e2fsprogs=y
+          CONFIG_PACKAGE_block-mount=y
+          CONFIG_PACKAGE_kmod-usb3=y
+          CONFIG_PACKAGE_kmod-usb-storage=y
+          CONFIG_PACKAGE_kmod-fs-exfat=y
+          CONFIG_PACKAGE_kmod-fs-vfat=y
+          CONFIG_PACKAGE_kmod-fs-ext4=y
+          CONFIG_PACKAGE_kmod-fs-f2fs=y
+          CONFIG_PACKAGE_mkf2fs=y
+          CONFIG_PACKAGE_f2fsck=y
+          EOF
+
+      - name: 展开默认配置 (make defconfig)
+        run: make defconfig
+
+      - name: 预下载 (make download)
+        run: |
+          make download -j$(nproc) V=s || make download -j1 V=s
+          find dl -size -1024c -exec ls -l {} \;
+
+      - name: 编译固件 (Build firmware)
+        run: |
+          echo "开始编译 JDCloud RE-SS-01 ..."
+          make -j$(nproc) V=s 2>&1 | tee build.log || make -j1 V=s 2>&1 | tee build.log
+
+      - name: 检查产物 (Check artifacts)
+        run: |
+          echo "=== bin/targets/qualcommax/ipq60xx ==="
+          ls -lh bin/targets/qualcommax/ipq60xx/ 2>/dev/null || echo "NO OUTPUT"
+          echo "=== grep factory/sysupgrade ==="
+          ls bin/targets/qualcommax/ipq60xx/*jdcloud* 2>/dev/null || true
+
+      - name: 上传固件 (Upload firmware)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: istoreos-jdcloud-re-ss-01
+          path: |
+            bin/targets/qualcommax/ipq60xx/*.bin
+            bin/targets/qualcommax/ipq60xx/*.manifest
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: 上传完整日志 (Upload build log)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: warn
+          retention-days: 7
