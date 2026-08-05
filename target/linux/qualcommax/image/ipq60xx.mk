@@ -85,11 +85,11 @@ define Device/jdcloud_re-ss-01
 	DEVICE_DTS_CONFIG := config@cp03-c2
 	SOC := ipq6000
 	BLOCKSIZE := 64k
-	# 京东云亚瑟 RE-SS-01 社区通用刷法：先刷 12M 大内核 GPT
-	# (gpt-JDC_AX1800_Pro_dual-boot_rootfs2048M_HLOS12M_no-last-partition.bin)，
-	# 再经 U-Boot Web 的 /big.html 端点刷 factory.bin。该 GPT 的 HLOS 分区为 12M，
-	# 故内核必须 pad 到 12M（12288k），否则 U-Boot 起不来（红灯/无 IP）。
-	KERNEL_SIZE := 12288k
+	# 京东云亚瑟 RE-SS-01：内核 pad 到 6M（6144k）。
+	# 参考 LiBwrt/LibWrt 与 qosmio/openwrt-ipq 的 jdcloud_re-ss-01 均用 6144k；
+	# 12M 内核会让 rootfs 偏移落到 HLOS 分区边界外，导致红灯/无 IP。
+	# 刷机走 U-Boot Web 的 / 端点（/big.html 是 12M 专用，6M 不需要）。
+	KERNEL_SIZE := 6144k
 	IMAGE/factory.bin := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-rootfs | append-metadata
 	DEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01 \
 		mkf2fs f2fsck kmod-fs-f2fs blkid block-mount \
