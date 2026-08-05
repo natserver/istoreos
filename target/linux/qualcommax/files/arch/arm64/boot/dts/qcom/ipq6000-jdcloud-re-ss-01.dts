@@ -30,8 +30,8 @@
 	};
 
 	chosen {
-		stdout-path = "serial0:115200n8";
-		bootargs-append = " rootfstype=squashfs,ext4 rootwait swiotlb=1 coherent_pool=2M";
+		bootargs = "console=ttyMSM0,115200,n8";
+		bootargs-append = " rootfstype=squashfs,ext4 swiotlb=1 coherent_pool=2M swiotlb=1";
 	};
 
 	keys {
