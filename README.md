@@ -33,19 +33,6 @@
 
 > ⚠️ 本机型用 12M HLOS 分区，必须走 `/big.html` 端点；`/` 端点对应 6M 内核，与本网 GPT 不匹配，误用会导致红灯不启动。
 
-## 本地编译（可选）
-
-需大小写敏感文件系统（Linux / macOS / WSL）：
-
-```bash
-./scripts/feeds update -a
-./scripts/feeds install -a
-make menuconfig   # Target: Qualcommax/IPQ60xx，勾选 jdcloud_re-ss-01
-make -j$(nproc)
-```
-
-产物位于 `bin/targets/qualcommax/ipq60xx/`。
-
 ## 免责声明
 
 刷机有风险，操作前请备份原厂固件与分区表。本仓库仅供学习研究，作者不对任何刷机导致的设备损坏负责。
