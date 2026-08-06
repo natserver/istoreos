@@ -109,31 +109,42 @@ _get_overlay_partition_fallback()
 # 避免 p3 是 0.2MB 的 BOOTCONFIG1 导致 overlay 写满、只读。
 _get_overlay_partition_loop()
 {
-	local rootdev bytes_used off loopdev devsize
-	rootdev=`block info | grep -Fw 'MOUNT="/"' | sed -E 's/^([^:]+):.*/\1/'`
-	[ -z "$rootdev" ] && {
+	local rootdev kbytes devsize off loopdev
+	# 1) 定位根设备（squashfs 所在分区，如 /dev/mmcblk0p18）
+	rootdev=`readlink -f /dev/root 2>/dev/null`
+	[ -b "$rootdev" ] || rootdev=`block info | grep -Fw 'MOUNT="/"' | sed -E 's/^([^:]+):.*/\1/'`
+	[ -b "$rootdev" ] || {
 		log "get_overlay_partition_loop: root device not found"
 		return 1
 	}
-	# squashfs 超级块 bytes_used 位于偏移 40（小端 u64）
-	bytes_used=`dd if="$rootdev" bs=1 skip=40 count=8 2>/dev/null | od -An -tu8 | tr -d ' '`
-	[ -z "$bytes_used" -o "$bytes_used" = "0" ] && {
+	# 2) squashfs 大小：df 输出的 1K 块数
+	kbytes=`df -k / 2>/dev/null | awk 'NR==2 {print $2}'`
+	[ -n "$kbytes" ] && [ "$kbytes" -gt 0 ] 2>/dev/null || {
 		log "get_overlay_partition_loop: cannot read squashfs size"
 		return 1
 	}
-	off=$(( (bytes_used + 4095) / 4096 * 4096 ))
-	devsize=`blockdev --getsize64 "$rootdev" 2>/dev/null`
-	[ -z "$devsize" ] && return 1
+	off=$(( (kbytes * 1024 + 4095) / 4096 * 4096 ))
+	# 3) 分区总大小（/sys 扇区数 × 512）
+	devsize=`cat /sys/class/block/${rootdev##*/}/size 2>/dev/null`
+	[ -n "$devsize" ] && devsize=$(( devsize * 512 ))
 	# 剩余空间小于 16MB 时放弃 loop 方式
-	[ $(( devsize - off )) -lt 16777216 ] && {
+	[ -n "$devsize" ] && [ $(( devsize - off )) -ge 16777216 ] || {
 		log "get_overlay_partition_loop: free space too small"
 		return 1
 	}
+	# 4) 创建 loop 设备
 	loopdev=`losetup -f 2>/dev/null`
-	[ -z "$loopdev" ] && return 1
+	[ -n "$loopdev" ] || {
+		log "get_overlay_partition_loop: no free loop device"
+		return 1
+	}
+	case "$loopdev" in
+	/dev/*) ;;
+	*) loopdev="/dev/${loopdev##*/}" ;;
+	esac
 	losetup -o "$off" "$loopdev" "$rootdev" 2>/dev/null || return 1
 	OVERLAY_DEV="$loopdev"
-	log "get_overlay_partition_loop: using $loopdev (offset $off)"
+	log "get_overlay_partition_loop: using $loopdev root=$rootdev offset=$off"
 	return 0
 }
 
