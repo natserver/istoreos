@@ -4,7 +4,6 @@
 
 #include "ipq6018-512m.dtsi"
 #include "ipq6018-ess.dtsi"
-#include "ipq6018-cp-cpu.dtsi"
 
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
@@ -124,6 +123,14 @@
 
 &qpic_bam {
 	status = "okay";
+};
+
+/* The RPM firmware on this device does not expose a usable glink RPM TOC;
+ * official OpenWrt disables this node, otherwise the RPM-based regulators
+ * (e.g. mp5496 l2 used by the eMMC vqmmc supply) never get registered and
+ * the eMMC controller cannot probe. */
+&rpm {
+	status = "disabled";
 };
 
 /* The RE-SS-01 boots from eMMC, which is wired to SDC1 (SDCC1).
