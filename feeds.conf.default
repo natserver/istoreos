@@ -6,4 +6,7 @@ src-git video https://github.com/openwrt/video.git;openwrt-25.12
 # istore
 src-git store https://github.com/linkease/istore.git;main
 # argon, etc.
-src-git third https://github.com/jjm2473/openwrt-third.git;main
+# Fork of jjm2473/openwrt-third with submodule refs fixed (upstream
+# force-pushed the luci-app-argon-config / luci-app-autotimeset /
+# luci-theme-argon repos, so the pinned commits no longer exist).
+src-git third https://github.com/natserver/openwrt-third.git;main
