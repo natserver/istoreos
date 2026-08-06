@@ -7,6 +7,7 @@ on:
       - istoreos-25.12
     paths:
       - 'feeds.conf.default'
+      - 'package/base-files/**'
       - 'target/linux/qualcommax/**'
       - 'package/firmware/ipq-wifi/**'
       - 'package/boot/uboot-tools/**'
