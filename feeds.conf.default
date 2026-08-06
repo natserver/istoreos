@@ -10,3 +10,5 @@ src-git store https://github.com/linkease/istore.git;main
 # force-pushed the luci-app-argon-config / luci-app-autotimeset /
 # luci-theme-argon repos, so the pinned commits no longer exist).
 src-git third https://github.com/natserver/openwrt-third.git;main
+# dae / daed (eBPF 透明代理) 后端与 LuCI 界面
+src-git daed https://github.com/wkccd/luci-app-daed-runfiles.git;kix
