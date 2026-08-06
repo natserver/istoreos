@@ -109,10 +109,16 @@ _get_overlay_partition_fallback()
 # 避免 p3 是 0.2MB 的 BOOTCONFIG1 导致 overlay 写满、只读。
 _get_overlay_partition_loop()
 {
-	local rootdev kbytes devsize off loopdev
+	local rootdev kbytes devsize off loopdev mm
 	# 1) 定位根设备（squashfs 所在分区，如 /dev/mmcblk0p18）
-	rootdev=`readlink -f /dev/root 2>/dev/null`
-	[ -b "$rootdev" ] || rootdev=`block info | grep -Fw 'MOUNT="/"' | sed -E 's/^([^:]+):.*/\1/'`
+	# /dev/root 只是设备节点，readlink 无法解析到真实分区，
+	# 改用 /proc/self/mountinfo 里根挂载的 maj:min 反查 /sys/dev/block
+	mm=`awk '$5 == "/" && $0 ~ / - squashfs / { print $3; exit }' /proc/self/mountinfo 2>/dev/null`
+	if [ -n "$mm" ]; then
+		rootdev=`readlink -f /sys/dev/block/$mm 2>/dev/null`
+		rootdev="/dev/${rootdev##*/}"
+	fi
+	[ -b "$rootdev" ] || rootdev=`readlink -f /dev/root 2>/dev/null`
 	[ -b "$rootdev" ] || {
 		log "get_overlay_partition_loop: root device not found"
 		return 1
