@@ -156,16 +156,6 @@ jobs:
             make -j1 V=s 2>&1 | tee -a build.log
           fi
 
-      - name: 编译 daed 安装包（不进固件，供手动安装）
-        run: |
-          echo "编译 daed / luci-app-daed 安装包（不进固件）"
-          if make package/feeds/daed/daed/compile package/feeds/daed/luci-app-daed/compile V=s 2>&1 | tee -a build.log; then
-            echo "daed 安装包编译成功"
-            find bin/packages -type f -name '*daed*.apk' -o -name '*geoip*.apk' -o -name '*geosite*.apk' | sort
-          else
-            echo "::warning::daed 安装包编译失败，固件不受影响，可稍后重试"
-          fi
-
       - name: 检查产物 (Check artifacts)
         run: |
           OUT=bin/targets/qualcommax/ipq60xx
@@ -187,10 +177,6 @@ jobs:
           path: |
             bin/targets/qualcommax/ipq60xx/*.bin
             bin/targets/qualcommax/ipq60xx/*.manifest
-            bin/packages/**/*daed*.apk
-            bin/packages/**/*geoip*.apk
-            bin/packages/**/*geosite*.apk
-            bin/packages/**/*xdp*.apk
           if-no-files-found: warn
           retention-days: 30
 
@@ -219,10 +205,6 @@ jobs:
           files: |
             bin/targets/qualcommax/ipq60xx/*.bin
             bin/targets/qualcommax/ipq60xx/*.manifest
-            bin/packages/**/*daed*.apk
-            bin/packages/**/*geoip*.apk
-            bin/packages/**/*geosite*.apk
-            bin/packages/**/*xdp*.apk
           body: |
             iStoreOS for 京东云亚瑟 AX1800 Pro（RE-SS-01, IPQ6000, eMMC）
 
