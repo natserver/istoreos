@@ -7,12 +7,8 @@ on:
       - istoreos-25.12
     paths:
       - 'feeds.conf.default'
-      - 'package/base-files/**'
       - 'target/linux/qualcommax/**'
-      - 'package/firmware/ipq-wifi/**'
-      - 'package/boot/uboot-tools/**'
-      - 'package/network/**'
-      - 'package/libs/libnftnl/**'
+      - 'package/**'
       - '.github/workflows/build-ax1800pro.yml'
 
 env:
@@ -121,6 +117,11 @@ jobs:
           CONFIG_PACKAGE_v2ray-geosite=y
           CONFIG_PACKAGE_zoneinfo-asia=y
           CONFIG_PACKAGE_luci-compat=y
+          # istore app store + quickstart (iStoreOS 首页/网络向导)
+          CONFIG_PACKAGE_luci-app-store=y
+          CONFIG_PACKAGE_quickstart=y
+          CONFIG_PACKAGE_luci-app-quickstart=y
+          CONFIG_PACKAGE_luci-i18n-quickstart-zh-cn=y
           EOF
 
       - name: 展开默认配置并校验机型 (defconfig + verify)
