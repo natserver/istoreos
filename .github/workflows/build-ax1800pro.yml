@@ -23,6 +23,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
 
+    permissions:
+      contents: write
+
     steps:
       - name: 检出代码 (Checkout)
         uses: actions/checkout@v4
@@ -163,3 +166,28 @@ jobs:
           path: build.log
           if-no-files-found: warn
           retention-days: 7
+
+      - name: 生成 GMT+8 时间戳 (Generate release timestamp)
+        id: ts
+        if: success()
+        run: |
+          echo "tag=rel-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
+          echo "human=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> "$GITHUB_OUTPUT"
+
+      - name: 发布 Release (Publish release on build success)
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ts.outputs.tag }}
+          name: 京东云亚瑟 AX1800 Pro (RE-SS-01) 固件 ${{ steps.ts.outputs.human }}
+          files: |
+            bin/targets/qualcommax/ipq60xx/*.bin
+            bin/targets/qualcommax/ipq60xx/*.manifest
+          body: |
+            iStoreOS for 京东云亚瑟 AX1800 Pro（RE-SS-01, IPQ6000, eMMC）
+
+            构建分支: istoreos-25.12
+            内核: 12 MiB（KERNEL_SIZE=12288k，配合 HLOS12M GPT + U-Boot `/big.html` 端点）
+            刷机: 先刷 HLOS12M 双启动 GPT，再经 U-Boot Web `/big.html` 端点刷 factory.bin；进入系统后用 sysupgrade.bin 升级。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
