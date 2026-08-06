@@ -14,9 +14,29 @@
 | OpenWrt 标识 | `jdcloud_re-ss-01` |
 | 目标子架构 | `qualcommax / ipq60xx` |
 
+## 内置软件
+
+- **eBPF / BTF 内核支持**：已开启 BTF、XDP、BPF Events、CGROUPS、BPF 工具链，并内置 daed 所需内核模块（kmod-sched-core / kmod-sched-bpf / kmod-veth / kmod-xdp-sockets-diag）；
+
+## 无线（手动开启）
+
+## 刷机流程
+
+1. 刷 **12M 大分区 U-Boot**（HLOS 12MiB）；
+2. 刷 **2GB GPT 模板**（rootfs 扩到 2048MiB，用于装固件，不能省略）；
+3. U-Boot 页面刷本项目 `factory.bin`
+4. Web 升级 `sysupgrade.bin`。
+
+### 刷机文件下载
+
+| 文件 | 下载 |
+| --- | --- |
+| 12M 大分区 U-Boot（jdcloud_re-ss-01） | [直接下载 .bin](https://github.com/chenxin527/uboot-qsdk12.5-build/releases/download/26.07.30-18.39.45-e7ba635/uboot-ipq60xx-jdcloud_re-ss-01-260730_183945_e7ba635.bin) · [Releases 页](https://github.com/chenxin527/uboot-qsdk12.5-build/releases) |
+| GPT 模板（rootfs2048M / HLOS12M） | [直接下载 .bin](https://github.com/GHNERCH/DAEWRT-AX1800PRO/raw/main/gpt-JDC_AX1800_Pro_dual-boot_rootfs2048M_HLOS12M_no-last-partition.bin) · [仓库页](https://github.com/GHNERCH/DAEWRT-AX1800PRO) |
+
 ## 免责声明
 
-刷机有风险，操作前请备份原厂固件与分区表。本仓库仅供学习研究，作者不对任何刷机导致的设备损坏负责。
+刷机有风险，请自行评估；本仓库仅用于学习交流。
 
 ## 许可证
 
