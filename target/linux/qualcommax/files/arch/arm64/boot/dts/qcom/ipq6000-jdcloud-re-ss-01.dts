@@ -126,19 +126,15 @@
 	status = "okay";
 };
 
-/* The RE-SS-01 boots from eMMC, there is no NAND on this board.
- * eMMC is wired to SDC1, which the upstream IPQ6018 dtsi labels &sdhc_1.
- * &sdhc (SDC2) is the SD-card controller and must stay disabled. */
-&sdhc_1 {
+/* The RE-SS-01 boots from eMMC, which is wired to SDC1 (SDCC1).
+ * In the IPQ6018 dtsi this controller is labelled &sdhc — there is no
+ * &sdhc_1 on IPQ60xx. The board has no SD-card slot. */
+&sdhc {
 	bus-width = <8>;
 	mmc-ddr-1_8v;
 	mmc-hs200-1_8v;
 	non-removable;
 	status = "okay";
-};
-
-&sdhc {
-	status = "disabled";
 };
 
 &qusb_phy_0 {
