@@ -34,7 +34,7 @@
 
 ## Run 安装器（可选，手动安装）
 
-本固件默认不内置 run 安装器，需要时按以下步骤手动安装（来源：[wukongdaily/luci-app-run](https://github.com/wukongdaily/luci-app-run)）。
+本固件默认不内置 run 安装器，需要时按以下步骤手动安装。
 
 ### 适用于 LuCI / OpenWrt 25.12（本固件）
 
