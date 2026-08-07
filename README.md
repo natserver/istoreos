@@ -50,9 +50,11 @@
 
 ### 安装 daed（可选）
 
-适合本仓库固件的daed：[点击下载daedrun安装文件](https://github.com/wkccd/luci-app-daed-runfiles/releases/download/v1.28.0/25-luci-app-dead_1.28-aarch64_cortex-a53.run)
+1. 下载：适合本仓库固件的daed：[点击下载daedrun安装文件](https://github.com/wkccd/luci-app-daed-runfiles/releases/download/v1.28.0/25-luci-app-dead_1.28-aarch64_cortex-a53.run)
 
-下载完成后，打开 **Run 安装器** 上传该 `.run` 文件并执行，等待安装完毕即可使用。
+2. 下载完成后，打开 **Run 安装器** 上传该 `.run` 文件并执行，等待安装完毕即可使用。
+
+3. 512m内存的设备节点不要搞太多，搞太多爆内存，路由器会死掉。
 
 ## 无线（手动开启）
 
