@@ -483,6 +483,7 @@ jobs:
                    etc/init.d/quickstart \
                    etc/init.d/tasks \
                    etc/uci-defaults/99_istoreos_services \
+                   etc/uci-defaults/98_luci_default_lang \
                    usr/lib/lua/luci/controller/quickstart.lua \
                    www/luci-static/quickstart/index.js \
                    www/luci-static/quickstart/vendor.js; do
@@ -497,6 +498,32 @@ jobs:
 
           echo "::group::rootfs 内 uci-defaults"
           grep '^etc/uci-defaults/' "$LIST" || echo "  （无）"
+          echo "::endgroup::"
+
+          # 中文界面链路：quickstart 的 SPA 是「以中文为源语言」的——
+          #   i18n/zh-cn.json 是空壳，翻译表为空时回退到 key（key 就是中文原文），
+          #   只有 i18n/en.json 存着「中文 key -> 英文」对照表。
+          # 所以 window.vue_lang 必须是 zh-cn，而它来自
+          #   i18n.translate("quickstart_vue_lang")
+          # → 需要 zh-cn 的 .lmo 目录在。缺了只是退回英文，不阻断发版，
+          #   所以这里只提示不失败（避免路径判断失误把好固件卡死）。
+          echo "::group::中文语言目录（软检查）"
+          LMO=usr/lib/lua/luci/i18n/quickstart.zh-cn.lmo
+          if grep -qxF "$LMO" "$LIST"; then
+            echo "  ok      /$LMO"
+          else
+            echo "  ::warning:: 未找到 /$LMO（quickstart 可能显示英文）"
+          fi
+          echo "  该目录实际内容："
+          grep '^usr/lib/lua/luci/i18n/quickstart' "$LIST" | sed 's/^/    /' || echo "    （无）"
+          echo "::endgroup::"
+
+          echo "::group::默认语言落点（软检查）"
+          if unsquashfs -cat "$SQ" etc/config/luci 2>/dev/null | grep -qE "^\s*option lang '(zh-cn|auto)'"; then
+            echo "  ok      /etc/config/luci 里有 lang 配置"
+          else
+            echo "  ??      /etc/config/luci 未读到 lang（首次启动由 uci-defaults 补）"
+          fi
           echo "::endgroup::"
 
           echo "::group::init 脚本行尾检查（必须为 LF）"

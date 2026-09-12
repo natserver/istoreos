@@ -1,0 +1,51 @@
+#!/bin/sh
+# Copyright (C) 2026 natserver
+#
+# 把 LuCI 的默认界面语言定为简体中文。
+#
+# 为什么需要这一步
+# ----------------
+# luci-base 自带的 /etc/config/luci 里是：
+#
+#     config core main
+#         option lang auto
+#
+# 也就是「跟随浏览器」。上游的 09_istoreos 只设了 system.zonename 与
+# luci.apply.*，99_theme 只设了 luci.main.mediaurlbase，两者都没碰 lang，
+# 所以从源码全新编译出来的固件，默认语言其实是不确定的。
+#
+# 而 luci-app-quickstart 的首页/网络向导 SPA 是「以中文为源语言」写的：
+#   - luasrc/view/quickstart/home.htm 里
+#         lang = i18n.translate("quickstart_vue_lang")
+#     而 po/zh-cn/quickstart.po 把 quickstart_vue_lang 映射成 "zh-cn"；
+#   - luasrc/view/quickstart/main.htm 把它输出成 window.vue_lang；
+#   - SPA 运行时抓 htdocs/luci-static/quickstart/i18n/<lang>.json：
+#         zh-cn.json 是空壳 {"zh-cn":{}} —— 翻译表为空时回退到 key，
+#         而 key 就是中文原文，所以显示中文；
+#         en.json 才是「中文 key -> 英文」的对照表。
+#   结论：只有当前语言是 zh-cn 时首页才是中文，否则一律英文。
+#
+# 只在 lang 为空或 auto 时改写，用户在界面上改过语言就尊重用户的选择。
+# 执行时机：uci-defaults 由 /etc/init.d/boot(S10boot) 源入执行，
+#          按文件名字母序（数字在前），最后统一 uci commit。
+
+LANG_WANT='zh-cn'
+LANG_NAME='简体中文'
+
+if [ -x /sbin/uci ]; then
+	cur="$(uci -q get luci.main.lang 2>/dev/null)"
+	case "$cur" in
+		""|auto)
+			uci -q set "luci.main.lang=$LANG_WANT"
+			;;
+	esac
+
+	# 语言下拉列表里必须有这一项，否则界面会退回默认语言。
+	# 注意 luci-i18n-base-zh-cn 也会写这一项（它名字是字母开头，
+	# 在本脚本之后执行），最终以它写的中文名为准，这里只是兜底。
+	uci -q set "luci.languages.zh_cn=$LANG_NAME"
+
+	uci -q commit luci
+fi
+
+exit 0
