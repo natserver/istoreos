@@ -1,0 +1,45 @@
+#!/bin/sh
+# Copyright (C) 2026 natserver
+#
+# 首次刷机（非升级）时启用 iStoreOS 的常驻服务。
+#
+# 背景：iStoreOS 的若干守护进程包（quickstart / taskd / startdhns）在
+# Makefile 的 install 段里只把 init 脚本装到 /etc/init.d/，并没有创建
+# /etc/rc.d/S??<name> 软链，也没有在 uci-defaults 里无条件 enable。
+# quickstart 自带的 09-quickstart 只在 PKG_UPGRADE=1（包升级）时才 enable，
+# 因此「全新编译出来的固件首次启动」这些服务是停的。
+#
+# 后果：luci-app-quickstart 的控制器 index() 第一句就是
+#     if luci.sys.call("pgrep quickstart >/dev/null") == 0 then
+# 服务没跑 → 只注册一个 redirect_fallback → 左侧菜单有「QuickStart」，
+# 点进去却直接跳走/空白；应用商店同理（依赖 taskd）。
+#
+# 这段脚本在首次启动的 uci-defaults 阶段无条件补齐 enable + start。
+# 用 [ -x /etc/init.d/xxx ] 逐个判断，缺包时自动跳过，不报错。
+
+enable_if_present() {
+	for s in "$@"; do
+		[ -x "/etc/init.d/$s" ] || continue
+		/etc/init.d/"$s" enable  >/dev/null 2>&1
+		/etc/init.d/"$s" start   >/dev/null 2>&1
+	done
+}
+
+# 首页 / 网络向导（LuCI 控制器依赖 pgrep quickstart）
+enable_if_present quickstart startdhns
+
+# 应用商店 / 任务队列（luci-app-store 依赖 taskd）
+enable_if_present tasks
+
+# 其余随包安装的常用服务，装了就开
+enable_if_present ttyd
+enable_if_present dockerd
+enable_if_present samba4
+enable_if_present ksmbd
+enable_if_present minidlna
+enable_if_present hd-idle
+
+# 清理 LuCI 菜单缓存，确保新注册的入口立即生效
+rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
+
+exit 0
