@@ -258,8 +258,10 @@ jobs:
         run: |
           # defconfig 对依赖不满足的包是静默丢弃的。这里逐项校验，
           # 缺哪个就报出来，避免又编出一个「没有首页」的固件。
-          HARD_FAIL=""
-          WARN_ONLY=""
+          #
+          # 注意：这段刻意不用 shell 函数 + 命令替换（$(...)）收集结果——
+          # 那样会把 ::group:: 之类的日志行一起吸进变量，造成误报。
+          # 改为写临时文件，再读文件判断。
           HARD="
           luci-app-store
           quickstart
@@ -305,38 +307,42 @@ jobs:
           minidlna
           "
 
+          : > /tmp/missing_hard
+          : > /tmp/missing_soft
+
           check_group() {
-            local label="$1"; shift
-            local acc=""
+            label="$1"; file="$2"; shift 2
             echo "::group::${label}"
-            for p in $@; do
+            for p in "$@"; do
               if grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
                 echo "  ok      CONFIG_PACKAGE_${p}"
               elif grep -q "^CONFIG_PACKAGE_${p}=" .config; then
                 echo "  MISSING CONFIG_PACKAGE_${p}（被 defconfig 丢弃）"
-                acc="$acc $p"
+                echo "$p" >> "$file"
               else
                 echo "  MISSING CONFIG_PACKAGE_${p}（符号不存在，可能包名有误）"
-                acc="$acc $p"
+                echo "$p" >> "$file"
               fi
             done
             echo "::endgroup::"
-            echo "$acc"
           }
 
-          HARD_FAIL=$(check_group "关键界面栈（缺失即失败）" $HARD)
-          WARN_ONLY=$(check_group "可选增强组件（缺失仅警告）" $SOFT)
+          check_group "关键界面栈（缺失即失败）" /tmp/missing_hard $HARD
+          check_group "可选增强组件（缺失仅警告）" /tmp/missing_soft $SOFT
+
+          WARN_ONLY=$(tr '\n' ' ' < /tmp/missing_soft | sed 's/  */ /g;s/^ //;s/ $//')
+          HARD_FAIL=$(tr '\n' ' ' < /tmp/missing_hard | sed 's/  */ /g;s/^ //;s/ $//')
 
           if [ -n "$WARN_ONLY" ]; then
-            echo "::warning::以下可选组件未进入固件:$WARN_ONLY"
+            echo "::warning::以下可选组件未进入固件: $WARN_ONLY"
           fi
 
           if [ -n "$HARD_FAIL" ]; then
-            echo "::error::关键界面栈在 defconfig 后丢失，完整版界面无法成型:$HARD_FAIL"
+            echo "::error::关键界面栈在 defconfig 后丢失，完整版界面无法成型: $HARD_FAIL"
             echo "::group::诊断：这些包是否被 feeds 收录"
             for p in $HARD_FAIL; do
               echo "--- $p"
-              ./scripts/feeds list -n 2>/dev/null | grep -x "$p" && echo "    (feeds 中有此包)" || echo "    (feeds 中未找到)"
+              ./scripts/feeds list -n 2>/dev/null | grep -x "$p" >/dev/null && echo "    (feeds 中有此包)" || echo "    (feeds 中未找到)"
             done
             echo "::endgroup::"
             exit 1
