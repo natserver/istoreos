@@ -26,7 +26,12 @@ enable_if_present() {
 }
 
 # 首页 / 网络向导（LuCI 控制器依赖 pgrep quickstart）
-enable_if_present quickstart startdhns
+# 注意 startdhns 官方用的是 boot 子命令，这里保持一致。
+enable_if_present quickstart
+[ -x /etc/init.d/startdhns ] && {
+	/etc/init.d/startdhns enable >/dev/null 2>&1
+	/etc/init.d/startdhns boot   >/dev/null 2>&1
+}
 
 # 应用商店 / 任务队列（luci-app-store 依赖 taskd）
 enable_if_present tasks
