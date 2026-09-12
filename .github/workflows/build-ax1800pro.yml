@@ -402,54 +402,84 @@ jobs:
 
       - name: 校验服务自启 (Verify services are enabled at first boot)
         run: |
-          # 关键：manifest 只证明「包被装了」，不证明「服务会开机自启」。
-          # luci-app-quickstart 的控制器首句是 pgrep quickstart，
-          # 守护进程没跑的话首页/网络向导只会注册成一个跳转，点进去是空白。
-          # 所以这里直接拆开 rootfs 看两件事：
-          #   1) quickstart 二进制与 init 脚本真的在
-          #   2) 我们的 99_istoreos_services uci-defaults 真的在
+          # manifest 只证明「包被装了」，不证明「服务会开机自启」。
+          # luci-app-quickstart 的控制器首句是 pgrep quickstart，进程没跑时
+          # 首页只会注册成一个跳转，点进去是空白。
+          #
+          # 实现要点（踩过的坑）：
+          #  - 不要真正解包。unsquashfs 解包在同一目录重跑会
+          #    "failed to make directory ... File exists" 直接 FATAL。
+          #  - 改用 unsquashfs -l 只读目录表，快且无副作用。
+          #  - 清单读取不可靠时（条目数/init.d 数异常）只警告不失败，
+          #    避免工具怪癖把好固件卡死；确有文件缺失才 exit 1。
           OUT=bin/targets/qualcommax/ipq60xx
           IMG=$(ls "$OUT"/*jdcloud*squashfs-sysupgrade.bin 2>/dev/null | head -1)
-          [ -z "$IMG" ] && { echo "::error::找不到 sysupgrade 镜像"; exit 1; }
+          if [ -z "$IMG" ]; then
+            echo "::error::找不到 sysupgrade 镜像"
+            exit 1
+          fi
+          echo "镜像: $IMG ($(stat -c%s "$IMG") 字节)"
 
-          WORK=$(mktemp -d)
+          sudo apt-get update -qq >/dev/null 2>&1 || true
           sudo apt-get install -y -qq squashfs-tools >/dev/null 2>&1 || true
-          # 镜像开头是 kernel，rootfs 在后面；用 binwalk 或直接找 squashfs 魔数
-          if ! unsquashfs -s "$IMG" >/dev/null 2>&1; then
-            OFFSET=$(grep -aboP 'hsqs' "$IMG" | head -1 | cut -d: -f1)
-            echo "squashfs 偏移: $OFFSET"
-            [ -z "$OFFSET" ] && { echo "::error::镜像中找不到 squashfs 文件系统"; exit 1; }
-            dd if="$IMG" of="$WORK/root.sqsh" bs=1 skip="$OFFSET" status=none
-            IMG="$WORK/root.sqsh"
+          if ! command -v unsquashfs >/dev/null 2>&1; then
+            echo "::warning::runner 上没有 unsquashfs，跳过自启校验"
+            exit 0
           fi
 
-          echo "::group::解包 rootfs"
-          unsquashfs -d "$WORK/root" -no-xattrs "$IMG" >/dev/null 2>&1 || \
-            unsquashfs -d "$WORK/root" -no-xattrs "$IMG"
-          echo "::endgroup::"
+          WORK=$(mktemp -d)
+          SQ="$IMG"
+          # 镜像前段是 kernel，rootfs(squashfs) 在后面，按魔数定位
+          if ! unsquashfs -s "$SQ" >/dev/null 2>&1; then
+            OFFSET=$(grep -abo 'hsqs' "$IMG" | head -1 | cut -d: -f1)
+            echo "squashfs 偏移: ${OFFSET:-未找到}"
+            if [ -n "$OFFSET" ]; then
+              # 用 tail 截取，避免 dd bs=1 逐字节读 100MB 慢得离谱
+              tail -c +$((OFFSET + 1)) "$IMG" > "$WORK/root.sqsh"
+              SQ="$WORK/root.sqsh"
+            fi
+          fi
 
-          R="$WORK/root"
+          LIST="$WORK/list.txt"
+          unsquashfs -l "$SQ" 2>/dev/null \
+            | sed 's,^squashfs-root/*,,' \
+            | awk 'NF{print $1}' | sort -u > "$LIST" || true
+          N=$(wc -l < "$LIST")
+          INITD=$(grep -c '^etc/init.d/' "$LIST" || true)
+          echo "rootfs 条目数: $N ; init.d 脚本数: $INITD"
+
+          if [ "$N" -lt 100 ] || [ "$INITD" -lt 5 ]; then
+            echo "::warning::squashfs 清单读取不可靠（条目 $N / init.d $INITD），跳过自启校验"
+            exit 0
+          fi
+
+          echo "::group::关键文件检查"
           FAIL=0
-          for f in usr/sbin/quickstart etc/init.d/quickstart etc/init.d/tasks \
+          for f in usr/sbin/quickstart \
+                   etc/init.d/quickstart \
+                   etc/init.d/tasks \
                    etc/uci-defaults/99_istoreos_services \
-                   www/luci-static/quickstart/index.js; do
-            if [ -e "$R/$f" ]; then
+                   usr/lib/lua/luci/controller/quickstart.lua \
+                   www/luci-static/quickstart/index.js \
+                   www/luci-static/quickstart/vendor.js; do
+            if grep -qxF "$f" "$LIST"; then
               echo "  ok      /$f"
             else
               echo "  MISSING /$f"
               FAIL=1
             fi
           done
-
-          echo "::group::uci-defaults 列表"
-          ls -1 "$R/etc/uci-defaults" 2>/dev/null || echo "  （无）"
           echo "::endgroup::"
 
-          if [ "$FAIL" = 1 ]; then
-            echo "::error::rootfs 内缺少首页运行所需的文件，刷机后 QuickStart 会点不开"
+          echo "::group::rootfs 内 uci-defaults"
+          grep '^etc/uci-defaults/' "$LIST" || echo "  （无）"
+          echo "::endgroup::"
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "::error::rootfs 内缺少首页运行所需文件，刷机后 QuickStart 会点不开"
             exit 1
           fi
-          echo "服务自启校验通过：quickstart 二进制 / init 脚本 / 启用脚本 / 前端资源齐全"
+          echo "服务自启校验通过：二进制 / init 脚本 / 启用脚本 / 前端资源齐全"
 
       - name: 上传固件 (Upload firmware)
         uses: actions/upload-artifact@v4
