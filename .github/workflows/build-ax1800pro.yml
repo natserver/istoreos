@@ -585,6 +585,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ts.outputs.tag }}
+          # 必须显式指定，否则 GitHub 会把 tag 打到「仓库默认分支的 HEAD」上，
+          # 而本工作流跑在 sync/istoreos-25.12-* 上（默认分支 istoreos-25.12
+          # 通常落后），于是 Release 的 tag 指向一个陈旧提交，按 tag 检出源码
+          # 复现会拿到没有本次修复的代码。
+          target_commitish: ${{ github.sha }}
           name: 京东云亚瑟 AX1800 Pro (RE-SS-01) 固件 ${{ steps.ts.outputs.human }}
           files: |
             bin/targets/qualcommax/ipq60xx/*.bin
@@ -592,7 +597,8 @@ jobs:
           body: |
             iStoreOS 完整版 for 京东云亚瑟 AX1800 Pro（RE-SS-01, IPQ6000, eMMC）
 
-            构建分支: istoreos-25.12
+            构建分支: ${{ github.ref_name }}
+            提交: ${{ github.sha }}
             内核: 12 MiB（KERNEL_SIZE=12288k，配合 HLOS12M GPT + U-Boot `/big.html` 端点）
             刷机: 先刷 HLOS12M 双启动 GPT，再经 U-Boot Web `/big.html` 端点刷 factory.bin；进入系统后用 sysupgrade.bin 升级。
 
