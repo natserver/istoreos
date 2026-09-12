@@ -3,7 +3,16 @@ local function vue_lang()
     local i18n = require("luci.i18n")
     local lang = i18n.translate("quickstart_vue_lang")
     if lang == "quickstart_vue_lang" or lang == "" then
-        lang = "en"
+        -- 回退：翻译目录没加载时用当前 LuCI 语言判断，中文统一映射成 zh-cn
+        local cur = i18n.context and i18n.context.lang
+        if not cur then
+            cur = (luci.http and luci.http.getenv and luci.http.getenv("HTTP_ACCEPT_LANGUAGE")) or ""
+        end
+        if tostring(cur):lower():match("^zh") then
+            lang = "zh-cn"
+        else
+            lang = "en"
+        end
     end
     return lang
 end

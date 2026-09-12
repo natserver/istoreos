@@ -31,6 +31,24 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: 规范化 vendored 包行尾 (Normalize vendored line endings)
+        run: |
+          # 【为什么必须有这一步】
+          # package/quickstart 与 package/luci-app-quickstart 是从 Windows 上
+          # 按文本方式拷进来的，所有文本文件都带 CRLF。而本仓库 .gitattributes
+          # 第一行是 `* -text`，git 不做任何换行转换，CRLF 会原样进固件：
+          #     /etc/init.d/quickstart 的 shebang 变成 "#!/bin/sh /etc/rc.common\r"
+          # 内核按 shebang exec 时去找 "/etc/rc.common\r" → "No such file or
+          # directory"，服务永远起不来 → 首页无数据、QuickStart 点开空白、
+          # iStore 商店打不开。这里统一转成 LF 并在末尾断言，防止再引入 CRLF。
+          find package/quickstart package/luci-app-quickstart -type f -print0 \
+            | xargs -0 -r sed -i 's/\r$//'
+          if grep -rlU $'\r' package/quickstart package/luci-app-quickstart; then
+            echo "::error::以上文件仍含 CR，固件内脚本将无法执行"
+            exit 1
+          fi
+          echo "行尾规范化完成，无残留 CR"
+
       - name: 释放磁盘空间 (Free disk space)
         run: |
           echo "::group::清理前"
@@ -402,9 +420,15 @@ jobs:
 
       - name: 校验服务自启 (Verify services are enabled at first boot)
         run: |
-          # manifest 只证明「包被装了」，不证明「服务会开机自启」。
-          # luci-app-quickstart 的控制器首句是 pgrep quickstart，进程没跑时
-          # 首页只会注册成一个跳转，点进去是空白。
+          # manifest 只证明「包被装了」，不证明「服务能跑起来」。
+          # luci-app-quickstart 的页面由 menu.d/luci-app-quickstart.json 注册
+          # （action = template quickstart/home），模板渲染出来只有一个空的
+          # <div id="app">，界面全靠 quickstart 守护进程经 ubus 供数。
+          # 守护进程没跑 → 菜单在、点进去空白。所以这里断言三件事：
+          #   1) quickstart 二进制 / init 脚本 / 前端资源都在 rootfs 里
+          #   2) 我们补的 99_istoreos_services 在（负责开机 enable + start）
+          #   3) init 脚本行尾是 LF —— CRLF 会让 shebang 变成
+          #      "#!/bin/sh /etc/rc.common\r"，内核 exec 直接失败
           #
           # 实现要点（踩过的坑）：
           #  - 不要真正解包。unsquashfs 解包在同一目录重跑会
@@ -475,11 +499,32 @@ jobs:
           grep '^etc/uci-defaults/' "$LIST" || echo "  （无）"
           echo "::endgroup::"
 
+          echo "::group::init 脚本行尾检查（必须为 LF）"
+          CRLF_HIT=0
+          for f in etc/init.d/quickstart etc/init.d/startdhns; do
+            if unsquashfs -cat "$SQ" "$f" > "$WORK/init.out" 2>/dev/null \
+               && [ -s "$WORK/init.out" ]; then
+              if grep -qU $'\r' "$WORK/init.out"; then
+                echo "  CRLF    /$f   <-- 内核无法 exec，服务起不来"
+                CRLF_HIT=1
+              else
+                echo "  ok      /$f"
+              fi
+            else
+              echo "  ??      无法读取 /$f，跳过行尾检查"
+            fi
+          done
+          echo "::endgroup::"
+
+          if [ "$CRLF_HIT" -ne 0 ]; then
+            echo "::error::固件内 init 脚本含 CRLF，刷机后 quickstart 服务不会启动"
+            exit 1
+          fi
           if [ "$FAIL" -ne 0 ]; then
             echo "::error::rootfs 内缺少首页运行所需文件，刷机后 QuickStart 会点不开"
             exit 1
           fi
-          echo "服务自启校验通过：二进制 / init 脚本 / 启用脚本 / 前端资源齐全"
+          echo "服务自启校验通过：二进制 / init 脚本 / 启用脚本 / 前端资源齐全，行尾为 LF"
 
       - name: 上传固件 (Upload firmware)
         uses: actions/upload-artifact@v4

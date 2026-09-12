@@ -7,42 +7,51 @@
 # Makefile 的 install 段里只把 init 脚本装到 /etc/init.d/，并没有创建
 # /etc/rc.d/S??<name> 软链，也没有在 uci-defaults 里无条件 enable。
 # quickstart 自带的 09-quickstart 只在 PKG_UPGRADE=1（包升级）时才 enable，
-# 因此「全新编译出来的固件首次启动」这些服务是停的。
+# 所以全新编译出来的固件「首次启动」这些服务是停的。
 #
-# 后果：luci-app-quickstart 的控制器 index() 第一句就是
-#     if luci.sys.call("pgrep quickstart >/dev/null") == 0 then
-# 服务没跑 → 只注册一个 redirect_fallback → 左侧菜单有「QuickStart」，
-# 点进去却直接跳走/空白；应用商店同理（依赖 taskd）。
+# 后果：luci-app-quickstart 的页面由 menu.d/luci-app-quickstart.json 注册
+# （action = template quickstart/home），模板渲染出来只有一个空的
+# <div id="app">，界面内容全靠 quickstart 守护进程经 ubus 供数。
+# 守护进程没跑 → 左侧菜单有「QuickStart」，点进去却是一片空白；
+# 应用商店同理（依赖 taskd）。
 #
-# 这段脚本在首次启动的 uci-defaults 阶段无条件补齐 enable + start。
-# 用 [ -x /etc/init.d/xxx ] 逐个判断，缺包时自动跳过，不报错。
+# 本脚本在 uci-defaults 阶段无条件补齐 enable + start。
+# 注意 S10boot 执行 uci-defaults 时 S92quickstart 早已错过，
+# 所以这里必须同时 start，只 enable 要等下次重启才生效。
 
-enable_if_present() {
-	for s in "$@"; do
-		[ -x "/etc/init.d/$s" ] || continue
-		/etc/init.d/"$s" enable  >/dev/null 2>&1
-		/etc/init.d/"$s" start   >/dev/null 2>&1
-	done
+enable_one() {
+	s="$1"; shift
+	[ -x "/etc/init.d/$s" ] || return 0
+
+	/etc/init.d/"$s" enable >/dev/null 2>&1
+
+	# enable 万一没成功（脚本被改坏等），按 START 值手工补软链
+	if ! ls /etc/rc.d/S??"$s" >/dev/null 2>&1; then
+		start=$(sed -n 's/^START=\([0-9]*\).*/\1/p' "/etc/init.d/$s" | head -1)
+		[ -n "$start" ] || start=95
+		ln -sf "/etc/init.d/$s" "/etc/rc.d/S${start}${s}" 2>/dev/null
+	fi
+
+	/etc/init.d/"$s" "$@" >/dev/null 2>&1
+	return 0
 }
 
-# 首页 / 网络向导（LuCI 控制器依赖 pgrep quickstart）
-# 注意 startdhns 官方用的是 boot 子命令，这里保持一致。
-enable_if_present quickstart
-[ -x /etc/init.d/startdhns ] && {
-	/etc/init.d/startdhns enable >/dev/null 2>&1
-	/etc/init.d/startdhns boot   >/dev/null 2>&1
-}
+# 首页 / 网络向导（界面数据全部来自 quickstart 守护进程）
+enable_one quickstart start
+
+# DHCP 相关（官方用的是 boot 子命令，保持一致）
+enable_one startdhns boot
 
 # 应用商店 / 任务队列（luci-app-store 依赖 taskd）
-enable_if_present tasks
+enable_one tasks start
 
 # 其余随包安装的常用服务，装了就开
-enable_if_present ttyd
-enable_if_present dockerd
-enable_if_present samba4
-enable_if_present ksmbd
-enable_if_present minidlna
-enable_if_present hd-idle
+enable_one ttyd start
+enable_one dockerd start
+enable_one samba4 start
+enable_one ksmbd start
+enable_one minidlna start
+enable_one hd-idle start
 
 # 清理 LuCI 菜单缓存，确保新注册的入口立即生效
 rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
