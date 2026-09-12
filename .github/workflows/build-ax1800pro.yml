@@ -49,6 +49,30 @@ jobs:
           fi
           echo "行尾规范化完成，无残留 CR"
 
+          # 【po 语言目录布局守卫】
+          # luci.mk 用 $(notdir $(wildcard po/*)) 枚举语言，再用
+          # $(wildcard po/<lang>/*.po) 找翻译源。po/ 下的每个语言条目
+          # 必须是「真目录」或「能解析的软链」。
+          # run #32 踩过这个坑：package/luci-app-quickstart/po/zh_Hans
+          # 在库里以 mode 100644 的 5 字节文本文件存在（本该是软链 zh-cn），
+          # 于是 make 的 wildcard 匹配 po/zh_Hans/*.po 为空 → po2lmo 不执行
+          # → quickstart.zh-cn.lmo 缺失 → 左侧菜单显示英文。
+          # 这种文件在 Windows 上肉眼完全看不出来，所以在这里硬断言。
+          bad=0
+          for d in package/quickstart/po package/luci-app-quickstart/po; do
+            [ -d "$d" ] || continue
+            for e in "$d"/*; do
+              [ -e "$e" ] || continue
+              if [ ! -d "$e" ]; then
+                echo "::error::$e 不是目录也不是可解析的软链（多为被压平的软链），"
+                echo "::error::luci.mk 会因此匹配不到 po 源，翻译文件不会生成"
+                bad=1
+              fi
+            done
+          done
+          [ "$bad" -eq 0 ] || exit 1
+          echo "po 语言目录布局正常"
+
       - name: 释放磁盘空间 (Free disk space)
         run: |
           echo "::group::清理前"
@@ -503,19 +527,28 @@ jobs:
           # 中文界面链路：quickstart 的 SPA 是「以中文为源语言」的——
           #   i18n/zh-cn.json 是空壳，翻译表为空时回退到 key（key 就是中文原文），
           #   只有 i18n/en.json 存着「中文 key -> 英文」对照表。
-          # 所以 window.vue_lang 必须是 zh-cn，而它来自
-          #   i18n.translate("quickstart_vue_lang")
-          # → 需要 zh-cn 的 .lmo 目录在。缺了只是退回英文，不阻断发版，
-          #   所以这里只提示不失败（避免路径判断失误把好固件卡死）。
-          echo "::group::中文语言目录（软检查）"
-          LMO=usr/lib/lua/luci/i18n/quickstart.zh-cn.lmo
-          if grep -qxF "$LMO" "$LIST"; then
-            echo "  ok      /$LMO"
+          # 另外 luci-app-quickstart 控制器的菜单项是 _("QuickStart") 这类
+          # 英文 msgid，靠 po/zh-cn/quickstart.po 翻成「首页 / 网络向导 /
+          # 磁盘阵列 / 网口配置」——没有 .lmo 左侧菜单就是英文。
+          #
+          # 这里改成硬失败（原来是软警告）。因为 run #32 的产物就踩过这个坑：
+          #   po/zh_Hans 本是软链，却以 mode 100644 的 5 字节文本文件存进了库，
+          #   luci.mk 的 $(notdir $(wildcard po/*)) 于是枚举出 zh-cn 与 zh_Hans，
+          #   别名把 zh_Hans 映射成同一个包名并「后定义覆盖」，最终生效的规则去
+          #   匹配 po/zh_Hans/*.po —— 那是个文件不是目录，匹配为空 →
+          #   po2lmo 压根没执行 → .lmo 缺失，而同一规则里的 uci-defaults
+          #   是无条件写的，所以「包装上了、语言名注册了、翻译文件没有」。
+          # 静默放过就会让用户看到英文菜单，所以必须拦住发版。
+          echo "::group::中文语言目录（硬检查）"
+          if grep -qE '^usr/lib/lua/luci/i18n/quickstart\.(zh-cn|zh_Hans)\.lmo$' "$LIST"; then
+            grep -E '^usr/lib/lua/luci/i18n/quickstart\.' "$LIST" | sed 's/^/  ok      \//'
           else
-            echo "  ::warning:: 未找到 /$LMO（quickstart 可能显示英文）"
+            echo "  MISSING /usr/lib/lua/luci/i18n/quickstart.zh-cn.lmo"
+            echo "          （左侧菜单会显示 QuickStart / NetworkGuide 等英文）"
+            FAIL=1
           fi
-          echo "  该目录实际内容："
-          grep '^usr/lib/lua/luci/i18n/quickstart' "$LIST" | sed 's/^/    /' || echo "    （无）"
+          echo "  -- 该目录实际内容 --"
+          grep '^usr/lib/lua/luci/i18n/' "$LIST" | sed 's/^/    /' || echo "    （无）"
           echo "::endgroup::"
 
           echo "::group::默认语言落点（软检查）"
@@ -548,10 +581,10 @@ jobs:
             exit 1
           fi
           if [ "$FAIL" -ne 0 ]; then
-            echo "::error::rootfs 内缺少首页运行所需文件，刷机后 QuickStart 会点不开"
+            echo "::error::rootfs 内缺少首页运行所需文件或中文翻译文件（刷机后界面点不开 / 显示英文）"
             exit 1
           fi
-          echo "服务自启校验通过：二进制 / init 脚本 / 启用脚本 / 前端资源齐全，行尾为 LF"
+          echo "服务自启校验通过：二进制 / init 脚本 / 启用脚本 / 前端资源齐全，行尾为 LF，中文翻译文件在位"
 
       - name: 上传固件 (Upload firmware)
         uses: actions/upload-artifact@v4
