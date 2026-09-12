@@ -371,7 +371,7 @@ define U-Boot/easepi-rk3588
 endef
 
 define U-Boot/easepi-rk3588-lp4-1866
-  $(U-Boot/rk3588/Default)
+  $(U-Boot/rk358x/Default)
   NAME:=Easepi RK3588 LPDDR4 1866Mhz
   DEPENDS:=+PACKAGE_u-boot-$(1):trusted-firmware-a-rk3588-tpl-lp4-1866
   TPL:=rk3588_ddr_lp4_1866MHz_lp5_2400MHz_v1.19.bin
@@ -381,7 +381,7 @@ define U-Boot/easepi-rk3588-lp4-1866
 endef
 
 define U-Boot/easepi-rk3588-uart2-115200
-  $(U-Boot/rk3588/Default)
+  $(U-Boot/rk358x/Default)
   NAME:=Easepi RK3588 UART2 115200
   DEPENDS:=+PACKAGE_u-boot-$(1):trusted-firmware-a-rk3588-tpl-uart2-115200
   TPL:=rk3588_ddr_lp4_2112MHz_lp5_2400MHz_uart2_115200_v1.19.bin
@@ -520,6 +520,16 @@ UBOOT_CUSTOMIZE_CONFIG := \
 UBOOT_MAKE_FLAGS += \
   BL31=$(STAGING_DIR_IMAGE)/$(ATF) \
   $(if $(TPL),ROCKCHIP_TPL=$(STAGING_DIR_IMAGE)/$(TPL))
+
+define Build/Configure
+	$(call Build/Configure/U-Boot)
+
+ifneq ($(filter %rk3576,$(BUILD_VARIANT)),)
+	$(TARGET_CC) -nostdlib -ffreestanding -Os -S -o $(PKG_BUILD_DIR)/rk3576-boost.S $(PKG_BUILD_DIR)/rk3576-boost.c
+	$(TARGET_CROSS)as -o $(PKG_BUILD_DIR)/rk3576-boost.o $(PKG_BUILD_DIR)/rk3576-boost.S
+	$(TARGET_CROSS)objcopy -O binary -j .text $(PKG_BUILD_DIR)/rk3576-boost.o $(PKG_BUILD_DIR)/rk3576-boost.bin
+endif
+endef
 
 define Build/InstallDev
 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)

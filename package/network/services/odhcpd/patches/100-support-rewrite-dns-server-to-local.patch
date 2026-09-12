@@ -4,11 +4,6 @@ Date: Wed, 30 Apr 2025 18:38:41 +0800
 Subject: [PATCH] odhcpd: support rewrite dns server to local ipv6 address
 
 (cherry picked from commit f617a849951cb937bae086f1522e08480c899c3b)
-
-Rebased onto odhcpd 5d7be43f (2026-06-29): upstream renamed the relayed
-DNS option pointer/counter from dns_ptr/dns_count to dns_addrs6/
-dns_addrs6_cnt and the interface fields dns/dns_cnt to dns_addrs6/
-dns_addrs6_cnt, which shifted both hunks.
 ---
  src/dhcpv6.c | 2 +-
  src/router.c | 2 +-
@@ -16,7 +11,7 @@ dns_addrs6_cnt, which shifted both hunks.
 
 --- a/src/dhcpv6.c
 +++ b/src/dhcpv6.c
-@@ -923,7 +923,7 @@
+@@ -923,7 +923,7 @@ static void relay_server_response(uint8_
  	}
  
  	/* Rewrite DNS servers if requested */
@@ -27,7 +22,7 @@ dns_addrs6_cnt, which shifted both hunks.
  
 --- a/src/router.c
 +++ b/src/router.c
-@@ -1315,7 +1315,7 @@
+@@ -1315,7 +1315,7 @@ static void forward_router_advertisement
  		}
  
  		/* If we have to rewrite DNS entries */

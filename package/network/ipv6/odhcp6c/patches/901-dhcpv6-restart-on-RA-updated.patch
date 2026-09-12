@@ -1,0 +1,210 @@
+From 59d35b1cdf45205ba430003317c2b68f4d65e304 Mon Sep 17 00:00:00 2001
+From: jjm2473 <jjm2473@gmail.com>
+Date: Mon, 29 Sep 2025 12:36:45 +0800
+Subject: [PATCH] dhcpv6: restart on RA updated
+
+Signed-off-by: jjm2473 <jjm2473@gmail.com>
+---
+ src/dhcpv6.c  | 35 +++++++++++++++++++++++++++++--
+ src/odhcp6c.c | 57 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/odhcp6c.h |  1 +
+ src/ra.c      |  5 ++++-
+ 4 files changed, 95 insertions(+), 3 deletions(-)
+
+--- a/src/dhcpv6.c
++++ b/src/dhcpv6.c
+@@ -267,6 +267,9 @@ static struct config_dhcp* config_dhcp =
+ // store unique ifname hash to use as IA->IAID
+ static uint32_t ifname_hash_iaid = 0;
+ 
++// workaround for non-standard servers
++static bool restart_on_renew_failed = false;
++
+ static uint32_t ntohl_unaligned(const uint8_t *data)
+ {
+ 	uint32_t buf;
+@@ -2069,7 +2072,8 @@ static void dhcpv6_handle_status_code(co
+ 
+ 	case DHCPV6_NoAddrsAvail:
+ 	case DHCPV6_NoPrefixAvail:
+-		if (orig == DHCPV6_MSG_REQUEST)
++		if (orig == DHCPV6_MSG_REQUEST ||
++			  (restart_on_renew_failed && (orig == DHCPV6_MSG_RENEW || orig == DHCPV6_MSG_REBIND)))
+ 			*ret = 0; // Failure
+ 		break;
+ 
+@@ -2249,6 +2253,10 @@ int dhcpv6_send_request(enum dhcpv6_msg
+ {
+ 	struct dhcpv6_retx *retx = &dhcpv6_retx[req_msg_type];
+ 	uint64_t current_milli_time = 0;
++	if (DHCPV6_MSG_UNKNOWN == req_msg_type) {
++		odhcp6c_is_dhcpv6_poll_stop(); // reset state, ignore return value
++		restart_on_renew_failed = false;
++	}
+ 
+ 	if (!retx->is_retransmit) {
+ 		// Initial delay handling
+@@ -2374,6 +2382,27 @@ int dhcpv6_receive_response(enum dhcpv6_
+ 	// Receive cycle
+ 	len = recvmsg(sock, &msg, 0);
+ 	if (len < 0) {
++		if ((DHCPV6_MSG_UNKNOWN == req_msg_type || DHCPV6_MSG_RENEW == req_msg_type || DHCPV6_MSG_REBIND == req_msg_type)
++					&& !restart_on_renew_failed && odhcp6c_is_dhcpv6_poll_stop()) {
++			restart_on_renew_failed = true;
++			t3 = 30;
++			if (t2 != UINT32_MAX)
++				t2 = 15;
++			if (t1 != UINT32_MAX)
++				t1 = 0;
++
++			if (DHCPV6_MSG_UNKNOWN == req_msg_type) {
++				warn("POLL is skipped due to RA updated");
++				return -101;
++			} else if (retx->timeout != UINT32_MAX) {
++				warn("%s reset timeout to 15s due to RA updated", retx->name);
++				retx->rto = 0;
++				retx->rc = 0;
++				retx->round_start = odhcp6c_get_milli_time();
++				retx->timeout = (retx->round_start - retx->start) / 1000 + 15;
++				return -1;
++			}
++		}
+ 		error("Error occurred when reading the response of (%s) error(%s)",
+ 			retx->name, strerror(errno));
+ 		return -1;
+--- a/src/odhcp6c.c
++++ b/src/odhcp6c.c
+@@ -61,6 +61,7 @@ static volatile bool signal_io = false;
+ static volatile bool signal_usr1 = false;
+ static volatile bool signal_usr2 = false;
+ static volatile bool signal_term = false;
++static volatile bool dhcpv6_poll_stop = false;
+ 
+ static bool client_id_param = false;
+ static int urandom_fd = -1;
+@@ -848,7 +849,13 @@ int main(_o_unused int argc, char* const
+ 		}
+ 
+ 		if (fds[0].revents & POLLIN)
+-			dhcpv6_receive_response(req_msg_type);
++			switch (dhcpv6_receive_response(req_msg_type)) {
++			case -101:
++				dhcpv6_set_state(DHCPV6_RESET);
++				break;
++			default:
++				break;
++			}
+ 
+ #ifdef WITH_UBUS
+ 		if (fds[1].revents & POLLIN)
+@@ -958,11 +965,53 @@ static bool odhcp6c_server_advertised()
+ 	return false;
+ }
+ 
++static bool odhcp6c_compare_entries(const struct odhcp6c_entry *a, size_t alen,
++	const struct odhcp6c_entry *b, size_t blen)
++{
++	size_t cmplen, esize, offset;
++	if (alen != blen)
++		return false;
++	if (alen < sizeof(struct odhcp6c_entry))
++		return true;
++
++	offset = 0;
++	while(true) {
++
++		if (b->length != a->length || a->auxlen != b->auxlen)
++			return false;
++		esize = odhcp6c_entry_size(a);
++		offset += esize;
++		if (offset > alen)
++			break;
++		cmplen = offsetof(struct odhcp6c_entry, target) + ((a->length + 7) / 8);
++
++		if (memcmp(a, b, cmplen) ||
++				memcmp(a->auxtarget, b->auxtarget, a->auxlen))
++			return false;
++
++		if (offset + sizeof(struct odhcp6c_entry) > alen)
++			break;
++		a = (struct odhcp6c_entry *)((uint8_t *)(a) + esize);
++		b = (struct odhcp6c_entry *)((uint8_t *)(b) + esize);
++	}
++	return true;
++}
++
+ bool odhcp6c_signal_process(void)
+ {
++	size_t len = 0;
++	uint8_t *ra_prefix = NULL;
+ 	while (signal_io) {
+ 		signal_io = false;
+ 
++		if (!len) {
++			ra_prefix = (uint8_t *)odhcp6c_get_state(STATE_RA_PREFIX, &len);
++			if (len) {
++				void *buf = alloca(len);
++				memcpy(buf, ra_prefix, len);
++				ra_prefix = (uint8_t *)buf;
++			}
++		}
+ 		size_t old_ra_prefix_size = state_len[STATE_RA_PREFIX];
+ 		bool ra_updated = ra_process();
+ 
+@@ -981,12 +1030,26 @@ bool odhcp6c_signal_process(void)
+ 			notify_state_change("ra-updated", (!ra && !bound) ?
+ 					script_sync_delay : script_accu_delay, false);
+ 			ra = true;
++			if (len) {
++				size_t newlen = 0;
++				struct odhcp6c_entry *new_ra_prefix = (struct odhcp6c_entry *)odhcp6c_get_state(STATE_RA_PREFIX, &newlen);
++				if (!odhcp6c_compare_entries((struct odhcp6c_entry *)ra_prefix, len, new_ra_prefix, newlen))
++					dhcpv6_poll_stop = true;
++			} else
++				dhcpv6_poll_stop = true;
+ 		}
+ 	}
+ 
+ 	return signal_usr1 || signal_usr2 || signal_term;
+ }
+ 
++bool odhcp6c_is_dhcpv6_poll_stop(void)
++{
++	bool ret = dhcpv6_poll_stop;
++	dhcpv6_poll_stop = false;
++	return ret;
++}
++
+ void odhcp6c_clear_state(enum odhcp6c_state state)
+ {
+ 	state_len[state] = 0;
+--- a/src/odhcp6c.h
++++ b/src/odhcp6c.h
+@@ -595,6 +595,7 @@ uint64_t odhcp6c_get_milli_time(void);
+ int odhcp6c_random(void *buf, size_t len);
+ bool odhcp6c_is_bound(void);
+ bool odhcp6c_addr_in_scope(const struct in6_addr *addr);
++bool odhcp6c_is_dhcpv6_poll_stop(void);
+ 
+ // State manipulation
+ void odhcp6c_clear_state(enum odhcp6c_state state);
+--- a/src/ra.c
++++ b/src/ra.c
+@@ -504,6 +504,7 @@ bool ra_process(void)
+ 	bool found = false;
+ 	bool changed = false;
+ 	uint8_t buf[1500] _o_aligned(4);
++	char addrbuf[INET6_ADDRSTRLEN];
+ 	union {
+ 		struct cmsghdr hdr;
+ 		uint8_t buf[CMSG_SPACE(sizeof(int))];
+@@ -670,6 +671,9 @@ bool ra_process(void)
+ 				entry->target.s6_addr32[2] = ra_addr.s6_addr32[2];
+ 				entry->target.s6_addr32[3] = ra_addr.s6_addr32[3];
+ 
++				debug("RA: %s/%d preferred %d valid %d",
++				    inet_ntop(AF_INET6, &entry->target, addrbuf, sizeof(addrbuf)),
++				    entry->length, entry->preferred , entry->valid);
+ 				changed |= odhcp6c_update_entry(STATE_RA_PREFIX, entry,
+ 								ra_holdoff_interval);
+ 

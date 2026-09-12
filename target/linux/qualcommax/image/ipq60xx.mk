@@ -86,9 +86,10 @@ define Device/jdcloud_re-ss-01
 	SOC := ipq6000
 	BLOCKSIZE := 64k
 	# 京东云亚瑟 RE-SS-01：用户刷入 HLOS12M GPT
-	# (gpt-JDC_AX1800_Pro_dual-boot_rootfs2048M_HLOS12M_no-last-partition.bin)，
-	# 其 HLOS 分区即 12M，配套 U-Boot Web 的 /big.html 端点刷 factory.bin，
-	# 故内核必须 pad 到 12M（12288k）。保留 /chosen 的 bootargs 修复。
+	# (gpt-JDC_AX1800_Pro_dual-boot_rootfs2048M_HLOS12M_no-last-partition.bin),
+	# 其 HLOS 分区即 12M，配套 U-Boot Web 的 /big.html 端点刷 factory.bin,
+	# 故内核必须 pad 到 12M(12288k);rootfs 2048MiB 的 overlay 由
+	# istoreos-boot.sh 的 loop 方式占满剩余空间
 	KERNEL_SIZE := 12288k
 	IMAGE/factory.bin := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-rootfs | append-metadata
 	DEVICE_PACKAGES := ipq-wifi-jdcloud_re-ss-01 \
