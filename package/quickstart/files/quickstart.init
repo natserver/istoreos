@@ -2,9 +2,14 @@
 
 START=92
 USE_PROCD=1
- 
 
-start_service() { 
+start_service() {
+	# 二进制以 --unix /var/run/quickstart/local.sock 启动，
+	# 但 procd 不会替我们创建该目录。目录不存在时二进制打印
+	# "listen unix addr failed, err=..." 后随即退出，procd 不停 respawn，
+	# 前端面板就会一直拿不到数据。这里先兜底建好目录。
+	mkdir -p /var/run/quickstart
+
 	procd_open_instance
 	procd_set_param command /usr/sbin/quickstart serve --unix /var/run/quickstart/local.sock
 	procd_set_param stderr 1

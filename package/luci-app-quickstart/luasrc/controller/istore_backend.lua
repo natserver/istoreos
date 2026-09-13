@@ -102,24 +102,71 @@ local function chunksource(sock, buffer)
 	end
 end
 
+-- 与 quickstart 守护进程建立连接。
+--
+-- 事实依据（直接拆官方 iStoreOS 25.12.5 固件得到的，两条都成立）：
+--   1) quickstart 0.13.0 二进制的默认监听地址是 TCP 127.0.0.1:3038
+--      （二进制内日志字符串 "start serve at" + "127.0.0.1:3038"），
+--      官方固件的 istore_backend.lua 也正是连它 —— 这是官方验证过的路径。
+--   2) init 脚本额外传了 --unix /var/run/quickstart/local.sock，
+--      二进制里有独立的 UnixRouterInit，故 unix socket 同样可用。
+--
+-- 因此先连 TCP，失败再退 Unix socket。
+--
+-- ⚠ 踩过的坑：nixio 的 Socket:connect 原型是 connect(host, port)，
+--   对 AF_UNIX 也必须给 port（0）。少传 port 时底层 luaL_checkint(nil)
+--   直接抛 Lua 错 → 控制器整体 500 → 用户看到
+--   「网络异常：500 Internal Server Error」。
+--   这里所有连接尝试一律 pcall，任何异常只当作「这条不通」，绝不外抛。
+local UNIX_SOCK = "/var/run/quickstart/local.sock"
+
+local function nfsobj()
+  local ok, fs = pcall(require, "nixio.fs")
+  if ok and fs then return fs end
+  return nixio.fs
+end
+
+local function connect_unix(path)
+  local ok, sk = pcall(function()
+    local s = nixio.socket("unix", "stream")
+    if not s then return nil end
+    -- AF_UNIX：host 是 socket 路径，port 必须给数值（0）
+    if s:connect(path, 0) == nil then return nil end
+    return s
+  end)
+  if ok and sk then return sk end
+  return nil
+end
+
+local function connect_backend()
+  local why = {}
+
+  -- 1) TCP 127.0.0.1:3038（官方默认监听地址）
+  local ok, sk = pcall(nixio.connect, "127.0.0.1", ISTOREOS_PORT)
+  if ok and sk then return sk, "tcp" end
+  why[#why+1] = "tcp 127.0.0.1:" .. tostring(ISTOREOS_PORT) .. " failed"
+
+  -- 2) Unix socket（init 里 --unix 指定的路径）
+  local fs = nfsobj()
+  if fs and fs.access and fs.access(UNIX_SOCK) then
+    sk = connect_unix(UNIX_SOCK)
+    if sk then return sk, "unix" end
+    why[#why+1] = "unix " .. UNIX_SOCK .. " connect failed"
+  else
+    why[#why+1] = "unix " .. UNIX_SOCK .. " not found"
+  end
+
+  return nil, table.concat(why, " | ")
+end
+
 function istore_backend() 
-  -- quickstart 0.13.x 二进制有两个独立的路由注册器：RouterInit（TCP） 与 UnixRouterInit（Unix socket）。当前 vendored 包的 quickstart.init 只启用了
-  -- /var/run/quickstart/local.sock，故优先走 Unix socket；TCP 3038 仍作为兜底， 兼容 future 二进制同时启 TCP 的情况。
-  local sock
-  local sock_path = "/var/run/quickstart/local.sock"
-  if nixio.fs.access(sock_path) then
-    -- nixio.connect(host, port) 对 UNIX socket 把 port 留空，host 作为 socket 路径
-    sock = nixio.connect(sock_path, "unix", "stream")
-    if not sock then
-      sock = nixio.socket("unix", "stream")
-      if sock then sock:connect(sock_path) end
-    end
-  end
+  local sock, how = connect_backend()
   if not sock then
-    sock = nixio.connect("127.0.0.1", ISTOREOS_PORT)
-  end
-  if not sock then
-    http.status(500, "connect failed (no unix socket nor tcp 127.0.0.1:3038)")
+    -- 502 比 500 贴切：这是「上游后端连不上」的网关错误。
+    -- 把两条通道各自的失败原因写进正文，可直接在浏览器里定位。
+    http.status(502, "quickstart backend unreachable")
+    http.prepare_content("text/plain; charset=utf-8")
+    http.write("quickstart backend unreachable\n" .. (how or "unknown") .. "\n")
     return
   end
   local input = {}

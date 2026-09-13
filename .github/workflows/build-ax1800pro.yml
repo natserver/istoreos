@@ -183,7 +183,12 @@ jobs:
           CONFIG_PACKAGE_luci-app-firewall=y
           CONFIG_PACKAGE_luci-app-package-manager=y
           CONFIG_PACKAGE_luci-compat=y
-          CONFIG_PACKAGE_luci-mod-dashboard=y
+          # 注意：**不要** 选 luci-mod-dashboard。
+          # 它的 menu.d/luci-mod-dashboard.json 会注册一个 admin/dashboard 顶层项，
+          # 中文 po 把 "Dashboard" 译作「主页」——于是左侧菜单会多出一个「主页」，
+          # 和 quickstart 的「首页」并排、重复且点击无内容。
+          # 官方 iStoreOS 25.12.5 的 /usr/share/luci/menu.d 里根本没有
+          # luci-mod-dashboard.json，即官方就不装这个包。
 
           # 终端（截图中「服务 > 终端」）
           CONFIG_PACKAGE_ttyd=y
@@ -445,14 +450,16 @@ jobs:
       - name: 校验服务自启 (Verify services are enabled at first boot)
         run: |
           # manifest 只证明「包被装了」，不证明「服务能跑起来」。
-          # luci-app-quickstart 的页面由 menu.d/luci-app-quickstart.json 注册
-          # （action = template quickstart/home），模板渲染出来只有一个空的
-          # <div id="app">，界面全靠 quickstart 守护进程经 ubus 供数。
-          # 守护进程没跑 → 菜单在、点进去空白。所以这里断言三件事：
+          # luci-app-quickstart 的菜单与页面由 luasrc/controller/quickstart.lua
+          # 用 entry({"admin","quickstart"}, template("quickstart/home"), _("QuickStart"), 1)
+          # 注册；模板渲染出来只有一个空的 <div id="app">，界面数据全靠
+          # quickstart 守护进程经 istore_backend 反代供数。
+          # 守护进程没跑 / 反代连不上 → 菜单在、点进去 502。所以这里断言：
           #   1) quickstart 二进制 / init 脚本 / 前端资源都在 rootfs 里
           #   2) 我们补的 99_istoreos_services 在（负责开机 enable + start）
           #   3) init 脚本行尾是 LF —— CRLF 会让 shebang 变成
           #      "#!/bin/sh /etc/rc.common\r"，内核 exec 直接失败
+          #   4) 反代与菜单项都正确（见下面两个 ::group::）
           #
           # 实现要点（踩过的坑）：
           #  - 不要真正解包。unsquashfs 解包在同一目录重跑会
@@ -580,11 +587,77 @@ jobs:
             echo "::error::固件内 init 脚本含 CRLF，刷机后 quickstart 服务不会启动"
             exit 1
           fi
+
+          # ---------------------------------------------------------------
+          # 反代控制器 / 菜单项检查
+          #
+          # 用户实测现象（rel-20260913-1339 之后）：
+          #   左侧菜单多出一个「主页」（其实是 luci-mod-dashboard 的 Dashboard），
+          #   且「首页」「网络向导」点开报 500 Internal Server Error。
+          # 根因：
+          #   a) luci-mod-dashboard 的 menu.d 注册了 admin/dashboard，
+          #      中文 po 把 "Dashboard" 译作「主页」→ 与「首页」重复。
+          #      官方 iStoreOS 根本不装这个包（其 menu.d 里没有这个 json）。
+          #   b) istore_backend.lua 连 quickstart 守护进程的那段写错了：
+          #      nixio 的 Socket:connect 原型是 connect(host, port)，
+          #      对 AF_UNIX 也必须给 port(0)；上一版少传 port 直接抛 Lua 错，
+          #      控制器整体 500 → 前端显示「网络异常：500 Internal Server Error」。
+          #      现在改成：先连 TCP 127.0.0.1:3038（官方验证过的路径），
+          #      失败再退 Unix socket，全部 pcall 包裹。
+          #   c) quickstart.init 需要先 mkdir /var/run/quickstart，
+          #      否则二进制 listen unix 失败后退出、procd 反复 respawn。
+          # ---------------------------------------------------------------
+          echo "::group::反代控制器与菜单项（硬检查）"
+          if grep -qxF 'usr/lib/lua/luci/controller/istore_backend.lua' "$LIST"; then
+            echo "  ok      /usr/lib/lua/luci/controller/istore_backend.lua"
+            if unsquashfs -cat "$SQ" usr/lib/lua/luci/controller/istore_backend.lua \
+                 > "$WORK/backend.lua" 2>/dev/null && [ -s "$WORK/backend.lua" ]; then
+              if grep -q 'connect_backend' "$WORK/backend.lua" \
+                 && grep -q 'pcall(nixio.connect, "127.0.0.1"' "$WORK/backend.lua" \
+                 && grep -q '/var/run/quickstart/local.sock' "$WORK/backend.lua"; then
+                echo "  ok      反代含 tcp(127.0.0.1:3038) + unix(local.sock) 双通道，且连接全部 pcall 包裹"
+              else
+                echo "  BAD     反代缺少双通道/pcall 保护（点开会报 500）"
+                FAIL=1
+              fi
+            else
+              echo "  ??      无法读取 istore_backend.lua，跳过内容检查"
+            fi
+          else
+            echo "  MISSING /usr/lib/lua/luci/controller/istore_backend.lua"
+            FAIL=1
+          fi
+
+          if grep -qxF 'usr/share/luci/menu.d/luci-mod-dashboard.json' "$LIST"; then
+            echo "  BAD     /usr/share/luci/menu.d/luci-mod-dashboard.json 仍在 —— 左侧菜单会多出「主页」"
+            FAIL=1
+          else
+            echo "  ok      没有 luci-mod-dashboard.json（不会多出「主页」）"
+          fi
+          if grep -qxF 'usr/share/luci/menu.d/luci-app-quickstart.json' "$LIST"; then
+            echo "  note    /usr/share/luci/menu.d/luci-app-quickstart.json 存在（其裸 title 会盖掉 _() 翻译）"
+          else
+            echo "  ok      没有 luci-app-quickstart.json（菜单标题走 controller 的 _() 翻译 → 首页/网络向导）"
+          fi
+
+          if unsquashfs -cat "$SQ" etc/init.d/quickstart > "$WORK/qs.init" 2>/dev/null \
+             && [ -s "$WORK/qs.init" ]; then
+            if grep -q 'mkdir -p /var/run/quickstart' "$WORK/qs.init"; then
+              echo "  ok      quickstart.init 会先建 /var/run/quickstart"
+            else
+              echo "  BAD     quickstart.init 未建 /var/run/quickstart（unix listen 会失败，服务起不来）"
+              FAIL=1
+            fi
+          else
+            echo "  ??      无法读取 quickstart.init，跳过内容检查"
+          fi
+          echo "::endgroup::"
+
           if [ "$FAIL" -ne 0 ]; then
-            echo "::error::rootfs 内缺少首页运行所需文件或中文翻译文件（刷机后界面点不开 / 显示英文）"
+            echo "::error::rootfs 内缺少首页运行所需文件 / 中文翻译 / 反代双通道（刷机后界面点不开、报 500 或显示英文）"
             exit 1
           fi
-          echo "服务自启校验通过：二进制 / init 脚本 / 启用脚本 / 前端资源齐全，行尾为 LF，中文翻译文件在位"
+          echo "服务自启校验通过：二进制 / init 脚本 / 启用脚本 / 前端资源齐全，行尾为 LF，中文翻译文件在位，反代 tcp+unix 双通道正确，菜单无重复「主页」"
 
       - name: 上传固件 (Upload firmware)
         uses: actions/upload-artifact@v4
