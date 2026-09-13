@@ -103,9 +103,23 @@ local function chunksource(sock, buffer)
 end
 
 function istore_backend() 
-  local sock = nixio.connect("127.0.0.1", ISTOREOS_PORT) 
+  -- quickstart 0.13.x 二进制有两个独立的路由注册器：RouterInit（TCP） 与 UnixRouterInit（Unix socket）。当前 vendored 包的 quickstart.init 只启用了
+  -- /var/run/quickstart/local.sock，故优先走 Unix socket；TCP 3038 仍作为兜底， 兼容 future 二进制同时启 TCP 的情况。
+  local sock
+  local sock_path = "/var/run/quickstart/local.sock"
+  if nixio.fs.access(sock_path) then
+    -- nixio.connect(host, port) 对 UNIX socket 把 port 留空，host 作为 socket 路径
+    sock = nixio.connect(sock_path, "unix", "stream")
+    if not sock then
+      sock = nixio.socket("unix", "stream")
+      if sock then sock:connect(sock_path) end
+    end
+  end
   if not sock then
-    http.status(500, "connect failed")
+    sock = nixio.connect("127.0.0.1", ISTOREOS_PORT)
+  end
+  if not sock then
+    http.status(500, "connect failed (no unix socket nor tcp 127.0.0.1:3038)")
     return
   end
   local input = {}
