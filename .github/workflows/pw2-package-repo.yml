@@ -41,15 +41,18 @@ jobs:
           set -euo pipefail
           ready=0
           run_id=
+          compat_sha=b291b8a8bf10930cd256aa975505aff65152ecd1
           for attempt in $(seq 1 160); do
-            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pw2-compat-probe.yml/runs" \
-              -f branch=codex/pw2-compat-probe-20261023 -f head_sha="$GITHUB_SHA" -f per_page=10 > build-status.json
-            run_id=$(jq -r --arg sha "$GITHUB_SHA" \
-              '[.workflow_runs[] | select(.head_sha==$sha and .head_branch=="codex/pw2-compat-probe-20261023")] | sort_by(.run_number) | last | .id // empty' build-status.json)
+            gh run list --repo "$GITHUB_REPOSITORY" \
+              --branch codex/pw2-compat-probe-20261023 \
+              --commit "$compat_sha" --workflow 'PW2 compatibility probe (NO FLASH)' \
+              --limit 10 --json databaseId,status,conclusion,headSha > build-status.json
+            run_id=$(jq -r --arg sha "$compat_sha" \
+              '[.[] | select(.headSha==$sha)] | sort_by(.databaseId) | last | .databaseId // empty' build-status.json)
             if [ -n "$run_id" ]; then
-              status=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id==$id) | .status' build-status.json)
+              status=$(jq -r --argjson id "$run_id" '.[] | select(.databaseId==$id) | .status' build-status.json)
               if [ "$status" = completed ]; then
-                conclusion=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id==$id) | .conclusion' build-status.json)
+                conclusion=$(jq -r --argjson id "$run_id" '.[] | select(.databaseId==$id) | .conclusion' build-status.json)
                 test "$conclusion" = success || {
                   echo 'Compatibility build failed: no packages may be produced.' >&2
                   exit 1
@@ -59,7 +62,7 @@ jobs:
               fi
             fi
             if [ $((attempt % 5)) -eq 1 ]; then
-              echo 'Waiting for this commit’s pinned offline compatibility proof; no deployment.'
+              echo 'Waiting for the pinned offline compatibility proof; no deployment.'
             fi
             sleep 60
           done
