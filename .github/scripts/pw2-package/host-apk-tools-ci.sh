@@ -43,7 +43,9 @@ APK="$OUT/bin/apk"
 TEST="$OUT/selftest"
 "$APK" --version | tee "$OUT/version.txt"
 grep -Eq 'apk-tools 3\.0\.5([ ,]|$)' "$OUT/version.txt" || die 'host binary version mismatch'
-"$APK" --help > "$OUT/applets.txt"
+help_rc=0
+"$APK" --help > "$OUT/applets.txt" || help_rc=$?
+[[ $help_rc == 0 || $help_rc == 1 ]] || die 'host APK help command failed unexpectedly'
 for applet in mkpkg mkndx adbsign verify adbdump; do
     grep -wq "$applet" "$OUT/applets.txt" || die "missing full-build applet: $applet"
 done
