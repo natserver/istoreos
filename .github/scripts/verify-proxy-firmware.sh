@@ -11,7 +11,9 @@ cp .config "$audit/openwrt.config"
 
 packages=(honk luci-app-honk
   kmod-tun kmod-sched-core kmod-sched-bpf kmod-veth
-  kmod-nft-queue kmod-nfnetlink-queue ip-full nftables-json
+  kmod-nft-queue kmod-nfnetlink-queue
+  kmod-nf-socket kmod-nf-tproxy kmod-nft-socket kmod-nft-tproxy
+  dnsmasq-full ip-full nftables-json
   v2ray-geoip v2ray-geosite
   jsonfilter jshn sqlite3-cli usign coreutils-stat ca-bundle)
 
@@ -19,6 +21,15 @@ require .config '^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y$'
 require .config '^CONFIG_KERNEL_DEBUG_INFO=y$'
 require .config '^CONFIG_KERNEL_DEBUG_INFO_BTF=y$'
 require .config '^# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set$'
+require .config '^# CONFIG_PACKAGE_dnsmasq is not set$'
+require .config '^# CONFIG_PACKAGE_dnsmasq-dhcpv6 is not set$'
+require .config '^CONFIG_PACKAGE_dnsmasq_full_dhcp=y$'
+require .config '^CONFIG_PACKAGE_dnsmasq_full_nftset=y$'
+require .config '^CONFIG_PACKAGE_dnsmasq_full_noid=y$'
+require .config '^CONFIG_PACKAGE_dnsmasq_full_tftp=y$'
+for option in dnsmasq_full_dhcpv6 dnsmasq_full_dnssec dnsmasq_full_auth dnsmasq_full_ipset dnsmasq_full_conntrack dnsmasq_full_broken_rtc; do
+  require .config "^# CONFIG_PACKAGE_${option} is not set$"
+done
 for package in "${packages[@]}"; do
   require .config "^CONFIG_PACKAGE_${package}=y$"
 done
@@ -42,6 +53,9 @@ done
 require "$kernel_config" '^# CONFIG_DEBUG_INFO_REDUCED is not set$'
 for option in NETFILTER_NETLINK_QUEUE NFT_QUEUE; do
   require "$kernel_config" "^CONFIG_${option}=[ym]$"
+done
+for option in NF_SOCKET_IPV4 NF_SOCKET_IPV6 NF_TPROXY_IPV4 NF_TPROXY_IPV6 NFT_SOCKET NFT_TPROXY; do
+  require "$kernel_config" "^CONFIG_${option}=m$"
 done
 
 # A seed/config flag is not proof: require a nonempty .BTF section in the ELF.
@@ -81,10 +95,13 @@ for file in usr/bin/honk-core etc/init.d/honk \
   etc/uci-defaults/zz-honk-preinstalled-disabled; do
   require "$work/rootfs.list" "(^|[[:space:]])squashfs-root/${file}$"
 done
-for pair in 'NETFILTER_NETLINK_QUEUE:nfnetlink_queue' 'NFT_QUEUE:nft_queue'; do
+for pair in 'NETFILTER_NETLINK_QUEUE:nfnetlink_queue' 'NFT_QUEUE:nft_queue' \
+  'NF_SOCKET_IPV4:nf_socket_ipv4' 'NF_SOCKET_IPV6:nf_socket_ipv6' \
+  'NF_TPROXY_IPV4:nf_tproxy_ipv4' 'NF_TPROXY_IPV6:nf_tproxy_ipv6' \
+  'NFT_SOCKET:nft_socket' 'NFT_TPROXY:nft_tproxy'; do
   if grep -Fxq "CONFIG_${pair%%:*}=m" "$kernel_config"; then
     require "$work/rootfs.list" \
-      "squashfs-root/lib/modules/[^/]+/${pair##*:}\\.ko(\\.(gz|xz|zst))?$"
+      "squashfs-root/lib/modules/[^/]+/.*${pair##*:}\\.ko(\\.(gz|xz|zst))?$"
   fi
 done
 unsquashfs -cat "$work/root.squashfs" etc/config/honk > "$work/honk.config"
@@ -97,7 +114,7 @@ cp feeds/honk/honk/generated-stage.mk "$audit/honk-stage.mk"
 git rev-parse HEAD > "$audit/source-commit.txt"
 sha256sum "$work/kernel.itb" | awk '{print $1}' > "$audit/kernel.sha256"
 (cd "$out"; sha256sum *.bin *.manifest > SHA256SUMS)
-printf 'PASS: BTF ELF, NFQUEUE modules, packaged FIT <=12MiB, Honk defaults disabled\n' \
+printf 'PASS: BTF ELF, NFQUEUE and PassWall2 modules, nftset-only dnsmasq-full, packaged FIT <=12MiB, Honk defaults disabled\n' \
   > "$audit/verification.txt"
 (cd "$audit"; sha256sum *.config *.json *.txt *.manifest *.mk *.tsv *.sha256 > AUDIT-SHA256SUMS)
 echo "Verified: $image; compressed FIT kernel $size / 12582912 bytes; audit in $audit"
