@@ -26,6 +26,16 @@ python3 - <<'PY'
 import hashlib,json,os,re
 from pathlib import Path
 r=Path(os.environ['ROOT']); out=Path(os.environ['OUT'])
+# The module probe already checked the final-initramfs projection and live BTF.
+# Pin its ACTUAL prepared-stage config, not the different final-stage archive.
+proof=out.parent/'module-probe'
+assert 'OFFLINE_BUILD_ONLY' in (proof/'RESULT.txt').read_text().splitlines(), 'Successful module proof required'
+module_config=(proof/'kernel.config').read_bytes()
+kernels=sorted((r/'build_dir').glob('target-*/linux-*/linux-*/.config'))
+assert kernels, 'No prepared target kernel config found'
+assert all(p.read_bytes()==module_config for p in kernels), 'Prepared kernel config differs from successful module proof'
+kernel_hashes={str(p.relative_to(r)):hashlib.sha256(p.read_bytes()).hexdigest() for p in kernels}
+(out/'kernel-config.before.json').write_text(json.dumps(kernel_hashes,sort_keys=True))
 # Make no changes to target/linux. Track every existing file, including local
 # reconstruction patches, instead of assuming the release used a clean tree.
 files={str(p.relative_to(r)):hashlib.sha256(p.read_bytes()).hexdigest()
@@ -55,7 +65,7 @@ audit_config() {
     python3 - <<'PY'
 import hashlib,json,os,re
 from pathlib import Path
-r=Path(os.environ['ROOT']); out=Path(os.environ['OUT']); audit=Path(os.environ['AUDIT'])
+r=Path(os.environ['ROOT']); out=Path(os.environ['OUT'])
 def config(p):
     result={}
     for l in p.read_text().splitlines():
@@ -75,11 +85,12 @@ expected=json.loads((out/'target-linux.before.json').read_text())
 actual={str(p.relative_to(r)):hashlib.sha256(p.read_bytes()).hexdigest()
         for p in (r/'target/linux').rglob('*') if p.is_file()}
 assert actual==expected, 'target/linux source/config files changed'
-# Any prepared target kernel must remain semantically identical to the release.
-# No requirement to prepare/build a kernel just for this userspace APK.
-reference=config(audit/'kernel.config')
-for p in (r/'build_dir').glob('target-*/linux-*/linux-*/.config'):
-    assert config(p)==reference, f'Target kernel config differs from release: {p}'
+# Byte-exact config and path-set equality before AND after userspace compile.
+# A newly created, removed or rewritten prepared config is a failed build.
+expected=json.loads((out/'kernel-config.before.json').read_text())
+actual={str(p.relative_to(r)):hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in (r/'build_dir').glob('target-*/linux-*/linux-*/.config')}
+assert actual==expected, 'Prepared kernel config set/bytes changed during userspace build'
 print('PASS: only requested userspace selectors changed; target kernel/source unchanged')
 PY
 }

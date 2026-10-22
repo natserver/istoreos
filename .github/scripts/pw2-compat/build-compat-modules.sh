@@ -4,14 +4,15 @@
 # Sources: Linux 6.12 scripts/Makefile.modfinal and kbuild/modules documentation.
 set -euo pipefail
 die() { printf 'STOP: %s\n' "$*" >&2; exit 1; }
-if (( $# < 3 || $# > 4 )); then
-    echo 'Usage: build-compat-modules.sh KERNEL_BUILD_DIR NEW_OUTPUT_DIR CROSS_COMPILE_PREFIX [JOBS]' >&2
+if (( $# < 4 || $# > 5 )); then
+    echo 'Usage: build-compat-modules.sh KERNEL_BUILD_DIR NEW_OUTPUT_DIR CROSS_COMPILE_PREFIX ORIGINAL_KERNEL_CONFIG [JOBS]' >&2
     exit 64
 fi
 KDIR=$(realpath -e -- "$1")
 OUT=$(realpath -m -- "$2")
 CROSS=$3
-JOBS=${4:-2}
+REFERENCE=$(realpath -e -- "$4")
+JOBS=${5:-2}
 [[ $JOBS =~ ^[1-9][0-9]*$ ]] || die 'JOBS must be a positive integer'
 [[ ! -e $OUT && ! -L $OUT ]] || die 'output directory must not exist'
 [[ $OUT != "$KDIR" && $OUT != "$KDIR/"* && $OUT != / ]] || die 'output must be outside the kernel tree'
@@ -28,7 +29,14 @@ done
 CONFIG_SHA=66abcbdc255de79fe23ae3f0559ead0b6c6f115aedb928c1a8e51a09d539a8cf
 LIVE_BTF_SHA=ce67f10fcaf9beee2b6547bd4640a2dc981a7862d7d46787998e6865dc6d60f3
 ABI=7f38d6580edcb2bc3d6da411c29e1504
-[[ $(sha256sum "$KDIR/.config" | cut -d' ' -f1) == "$CONFIG_SHA" ]] || die 'kernel .config differs from the archived original release'
+mkdir -m 700 -- "$OUT"
+# The archived audit is the final initramfs stage, not the module stage.
+# Project only a COPY through original Kconfig and require the exact audit hash.
+python3 "$(dirname -- "$0")/project-kernel-stage.py" \
+    --kernel "$KDIR" --reference "$REFERENCE" --cross "$CROSS" \
+    --out "$OUT/stage-projection"
+cp -- "$KDIR/.config" "$OUT/kernel.config"
+[[ $(sha256sum "$OUT/stage-projection/reference-final.config" | cut -d' ' -f1) == "$CONFIG_SHA" ]] || die 'original final-stage projection hash mismatch' 
 [[ $(cat "$KDIR/.vermagic") == "$ABI" ]] || die 'OpenWrt baseline ABI differs from original'
 [[ $(cat "$KDIR/include/config/kernel.release") == 6.12.94 ]] || die 'kernel release mismatch'
 for required in CONFIG_MODULES=y CONFIG_MODULE_UNLOAD=y CONFIG_IPV6=y CONFIG_NF_TABLES=m CONFIG_NF_CONNTRACK=m CONFIG_DEBUG_INFO_BTF=y CONFIG_DEBUG_INFO_BTF_MODULES=y; do
@@ -45,7 +53,6 @@ sources=(net/ipv4/netfilter/nf_socket_ipv4.c net/ipv6/netfilter/nf_socket_ipv6.c
 for file in "${sources[@]}"; do
     [[ -s $KDIR/$file ]] || die "missing patched original source: $file"
 done
-mkdir -m 700 -- "$OUT"
 for file in "${baseline[@]}"; do sha256sum "$KDIR/$file"; done > "$OUT/baseline-before.sha256"
 for file in "${sources[@]}"; do sha256sum "$KDIR/$file"; done > "$OUT/sources-before.sha256"
 trap 'rc=$?; trap - EXIT; if ! sha256sum -c "$OUT/baseline-before.sha256" "$OUT/sources-before.sha256" > "$OUT/baseline-integrity.log" 2>&1; then echo "STOP: baseline/source mutation; discard outputs" >&2; rc=90; fi; exit "$rc"' EXIT

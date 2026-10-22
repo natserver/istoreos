@@ -46,6 +46,18 @@ DEPS = {
     'kmod-nft-tproxy': [f'kernel={KERNEL_APK}', f'kmod-nft-core={KERNEL}-r1',
                         f'kmod-nf-conntrack={KERNEL}-r1', f'kmod-nf-tproxy={VERSION}'],
 }
+# Exact fields assigned by pinned include/kernel-defaults.mk SetInitramfs,
+# plus their named decompressor Kconfig selects. Never a prefix allowlist.
+STAGE_DIRECT = {
+    'CONFIG_INITRAMFS_SOURCE', 'CONFIG_INITRAMFS_ROOT_UID', 'CONFIG_INITRAMFS_ROOT_GID',
+    'CONFIG_INITRAMFS_FORCE', 'CONFIG_INITRAMFS_PRESERVE_MTIME',
+    'CONFIG_INITRAMFS_COMPRESSION_NONE',
+} | {f'CONFIG_INITRAMFS_COMPRESSION_{x}' for x in ('GZIP', 'BZIP2', 'LZMA', 'LZO', 'XZ', 'LZ4', 'ZSTD')} 
+STAGE_DERIVED = {f'CONFIG_{kind}_{x}' for kind in ('RD', 'DECOMPRESS')
+                 for x in ('GZIP', 'BZIP2', 'LZMA', 'LZO', 'XZ', 'LZ4', 'ZSTD')}
+STAGE_ALLOWED = STAGE_DIRECT | STAGE_DERIVED
+STAGE_RESULT = 'PASS: original final-stage projection matched; real kernel files unchanged'
+
 WANT = {'CONFIG_PACKAGE_dnsmasq': 'n', 'CONFIG_PACKAGE_dnsmasq-dhcpv6': 'n',
         'CONFIG_PACKAGE_dnsmasq-full': 'y', 'CONFIG_PACKAGE_dnsmasq_full_dhcp': 'y',
         'CONFIG_PACKAGE_dnsmasq_full_dhcpv6': 'n', 'CONFIG_PACKAGE_dnsmasq_full_dnssec': 'n',
@@ -106,6 +118,73 @@ def config_values(text):
         if match:
             values[match[1]] = 'n'
     return values
+
+
+def strict_kernel_config(text):
+    # Duplicate assignments must not hide an earlier conflicting network setting.
+    values = {}
+    for line in text.splitlines():
+        match = re.fullmatch(r'(CONFIG_[\w-]+)=(.*)', line)
+        disabled = re.fullmatch(r'# (CONFIG_[\w-]+) is not set', line)
+        if match or disabled:
+            key = (match or disabled)[1]
+            need(key not in values, f'Duplicate kernel config assignment: {key}')
+            values[key] = match[2] if match else 'n'
+        elif line.startswith('CONFIG_') or line.startswith('# CONFIG_'):
+            need(False, 'Malformed kernel config assignment')
+    need(values, 'Empty kernel config semantics')
+    return values
+
+
+def validate_stage_changes(actual, final, recorded):
+    need(isinstance(recorded, dict)
+         and all(isinstance(k, str) and isinstance(v, list) and len(v) == 2
+                 and all(isinstance(x, str) for x in v) for k, v in recorded.items()),
+         'Malformed stage change ledger')
+    changes = {k: [actual.get(k, 'n'), final.get(k, 'n')]
+               for k in actual.keys() | final.keys() if actual.get(k, 'n') != final.get(k, 'n')}
+    need(changes == recorded, 'Stage change ledger does not exactly match config semantics')
+    need(set(changes) <= STAGE_ALLOWED,
+         'Non-initramfs kernel config changed during stage projection')
+    for key, pair in changes.items():
+        if key == 'CONFIG_INITRAMFS_SOURCE':
+            need(all(re.fullmatch(r'"[^"\\\r\n]*"', value) is not None for value in pair),
+                 'Invalid projected initramfs source')
+        elif key in ('CONFIG_INITRAMFS_ROOT_UID', 'CONFIG_INITRAMFS_ROOT_GID'):
+            need(all(value == 'n' or re.fullmatch(r'[0-9]+', value) is not None for value in pair),
+                 'Invalid projected initramfs ownership')
+        else:
+            need(all(value in ('y', 'n') for value in pair), 'Invalid projected initramfs selector')
+    return changes
+
+
+def unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        need(key not in result, 'Duplicate field in stage projection JSON')
+        result[key] = value
+    return result
+
+
+def stage_projection(modules):
+    stage = modules / 'stage-projection'
+    actual = regular(modules / 'kernel.config').read_bytes()
+    need(regular(stage / 'actual-kernel.config').read_bytes() == actual,
+         'Stage projection actual config is not the module build config')
+    final = regular(stage / 'reference-final.config').read_bytes()
+    need(sha(final) == CONFIG_SHA, 'Final-stage projection differs from original archived config')
+    need(regular(stage / 'RESULT.txt').read_text().strip() == STAGE_RESULT,
+         'Stage projection did not preserve real kernel files')
+    ledger = json.loads(regular(stage / 'stage-diff.json').read_text(), object_pairs_hook=unique_json_object)
+    need(isinstance(ledger, dict)
+         and set(ledger) == {'changes', 'actual_sha256', 'reference_final_sha256'},
+         'Unexpected stage projection ledger schema')
+    need(ledger['actual_sha256'] == sha(actual) and ledger['reference_final_sha256'] == CONFIG_SHA,
+         'Stage projection ledger checksum mismatch')
+    changes = validate_stage_changes(strict_kernel_config(actual.decode('utf-8')),
+                                     strict_kernel_config(final.decode('utf-8')), ledger['changes'])
+    return {'actual_sha256': sha(actual), 'reference_final_sha256': CONFIG_SHA,
+            'changes': changes, 'result': STAGE_RESULT}
 
 
 def btf_header(data):
@@ -223,7 +302,8 @@ def input_gates(root):
          and len(before) == 7, 'Incomplete baseline manifest')
     need({PurePosixPath(n).name for _, n in sources} == {f'{m}.c' for m in MODULES}
          and len(sources) == 6, 'Incomplete source manifest')
-    anchored = {'.config': CONFIG_SHA, '.vermagic': sha((ABI + '\n').encode()),
+    projection = stage_projection(modules)
+    anchored = {'.config': projection['actual_sha256'], '.vermagic': sha((ABI + '\n').encode()),
                 'kernel.release': sha((KERNEL + '\n').encode())}
     for digest, name in before:
         leaf = PurePosixPath(name).name
@@ -251,7 +331,7 @@ def input_gates(root):
     need(len(candidates) == 1, 'Expected exactly one compiled DNS APK')
     original_dns = regular(candidates[0])
     verify_payloads(dns, dns / 'SHA256SUMS', [original_dns.name])
-    return modules, original_dns, base, hashes
+    return modules, original_dns, base, hashes, projection
 
 
 def self_test():
@@ -281,14 +361,32 @@ def self_test():
     assert all(f'kernel={KERNEL_APK}' in deps for deps in DEPS.values())
     assert not any('force' in dep or dep.startswith('kernel=') and dep != f'kernel={KERNEL_APK}'
                    for deps in DEPS.values() for dep in deps)
-    print('PASS: embedded metadata/checksum/BTF/ownership guards; no files written')
+    actual = strict_kernel_config('CONFIG_NF_TABLES=m\nCONFIG_NF_CONNTRACK=m\n'
+                                  'CONFIG_INITRAMFS_SOURCE=""\nCONFIG_RD_GZIP=y\n')
+    final = {**actual, 'CONFIG_INITRAMFS_SOURCE': '"/fixed/original/root"',
+             'CONFIG_RD_GZIP': 'n', 'CONFIG_RD_ZSTD': 'y', 'CONFIG_DECOMPRESS_ZSTD': 'y'}
+    changes = {k: [actual.get(k, 'n'), final.get(k, 'n')] for k in actual.keys() | final.keys()
+               if actual.get(k, 'n') != final.get(k, 'n')}
+    assert validate_stage_changes(actual, final, changes) == changes
+    rejected(validate_stage_changes, actual, final, {})
+    rejected(validate_stage_changes, actual, final, {**changes, 'CONFIG_RD_ZSTD': ['y', 'n']})
+    for forbidden in ('CONFIG_NF_CONNTRACK_EVENTS', 'CONFIG_NFT_SOCKET', 'CONFIG_IPV6',
+                      'CONFIG_RANDSTRUCT_FULL', 'CONFIG_RD_FAKE', 'CONFIG_INITRAMFS_UNREVIEWED'):
+        altered = {**actual, forbidden: 'y'}
+        ledger = {k: [altered.get(k, 'n'), final.get(k, 'n')]
+                  for k in altered.keys() | final.keys() if altered.get(k, 'n') != final.get(k, 'n')}
+        rejected(validate_stage_changes, altered, final, ledger)
+    rejected(strict_kernel_config, 'CONFIG_NF_TABLES=m\nCONFIG_NF_TABLES=y\n')
+    rejected(strict_kernel_config, 'CONFIG_NF_TABLES=m\n# CONFIG_NF_TABLES is not set\n')
+    rejected(unique_json_object, [('changes', {}), ('changes', {})])
+    print('PASS: embedded metadata/checksum/BTF/ownership/stage-projection guards; no files written')
 
 
 def main(args):
     need(hasattr(os, 'geteuid') and os.geteuid() == 0,
          'Run packaging as root in disposable CI so payload ownership is root:root')
     root = Path(args.proof).resolve(strict=True)
-    modules, original_dns, base, original_hashes = input_gates(root)
+    modules, original_dns, base, original_hashes, projection = input_gates(root)
     out = Path(args.out).absolute()
     need(not out.exists() and not out.is_symlink(), 'Output must not exist')
     out = out.resolve()
@@ -436,6 +534,7 @@ def main(args):
     proof = {'status': 'SIGNED_REPOSITORY_ONLY_NOT_INSTALLED_OR_RUNTIME_VALIDATED',
              'source_commit': PIN, 'audit_manifest_sha256': AUDIT_SHA, 'base_btf_sha256': BTF_SHA,
              'kernel_dependency': KERNEL_APK, 'module_package_version': VERSION, 'arch': ARCH,
+             'kernel_config_stage_projection': projection,
              'exports_gate': 'successful producer fatal-modpost result and unchanged baseline/source manifest',
              'public_key_spki_sha256': sha(public_der), 'modules': checked_modules,
              'packages': summaries, 'dns_original_apk_sha256': sha(original_dns.read_bytes()),

@@ -72,13 +72,60 @@ jobs:
           make defconfig
           ./scripts/diffconfig.sh > ../proof/baseline-openwrt.diffconfig
 
-      - name: Rebuild original toolchain and original kernel baseline
+      - name: Restore original host tools and cross toolchain only
+        id: original-toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            source/staging_dir
+            source/build_dir/host
+            source/build_dir/toolchain-*
+            source/dl
+          key: pw2-original-130d1ed-8f13cf6-gcc1430-pahole131-v1
+
+      - name: Rebuild original toolchain
         working-directory: source
         shell: bash
         run: |
           set -euo pipefail
           make -j2 tools/install V=s 2>&1 | tee ../proof/tools.log
           make -j2 toolchain/install V=s 2>&1 | tee ../proof/toolchain.log
+
+      - name: Preserve original host tools and cross toolchain even if a later gate fails
+        uses: actions/cache/save@v4
+        if: success() && steps.original-toolchain.outputs.cache-hit != 'true'
+        with:
+          path: |
+            source/staging_dir
+            source/build_dir/host
+            source/build_dir/toolchain-*
+            source/dl
+          key: pw2-original-130d1ed-8f13cf6-gcc1430-pahole131-v1
+
+      - name: Validate original configuration stage before the long kernel compile
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          # dtb reaches the native configuration stamp without compiling a full kernel/rootfs.
+          make -j2 target/linux/dtb V=s 2>&1 | tee ../proof/kernel-configure.log
+          mapfile -t kernels < <(find "$PWD/build_dir" -type f -path '*/linux-6.12.94/.vermagic')
+          test "${#kernels[@]}" -eq 1
+          kernel=${kernels[0]%/.vermagic}
+          mapfile -t compilers < <(find "$PWD/staging_dir" \( -type f -o -type l \) -path '*/bin/aarch64-openwrt-linux-musl-gcc')
+          test "${#compilers[@]}" -eq 1
+          cross=${compilers[0]%gcc}
+          export PATH="$PWD/staging_dir/host/bin:$(dirname -- "${compilers[0]}"):$PATH"
+          python3 ../control/.github/scripts/pw2-compat/project-kernel-stage.py \
+            --kernel "$kernel" --reference "$GITHUB_WORKSPACE/baseline/kernel.config" \
+            --cross "$cross" --out "$GITHUB_WORKSPACE/proof/precompile-stage-projection"
+          test "$(cat "$kernel/.vermagic")" = 7f38d6580edcb2bc3d6da411c29e1504
+
+      - name: Rebuild original kernel baseline
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
           make -j2 target/linux/compile V=s 2>&1 | tee ../proof/kernel-baseline.log
 
       - name: Compile six external modules only if original config and live BTF match
@@ -92,8 +139,13 @@ jobs:
           mapfile -t compilers < <(find "$PWD/staging_dir" \( -type f -o -type l \) -path '*/bin/aarch64-openwrt-linux-musl-gcc')
           test "${#compilers[@]}" -eq 1
           cross=${compilers[0]%gcc}
+          export PATH="$PWD/staging_dir/host/bin:$(dirname -- "${compilers[0]}"):$PATH"
+          mkdir -p ../proof/actual-kernel
+          for file in .config .config.set .config.target .config.override .vermagic; do
+            test ! -f "$kernel/$file" || cp -- "$kernel/$file" "../proof/actual-kernel/${file#.}"
+          done
           bash ../control/.github/scripts/pw2-compat/build-compat-modules.sh \
-            "$kernel" "$GITHUB_WORKSPACE/proof/module-probe" "$cross" 2
+            "$kernel" "$GITHUB_WORKSPACE/proof/module-probe" "$cross" "$GITHUB_WORKSPACE/baseline/kernel.config" 2
 
       - name: Compile nftset-only DNS userspace without conntrack kernel changes
         working-directory: source

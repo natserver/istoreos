@@ -40,26 +40,32 @@ jobs:
         run: |
           set -euo pipefail
           ready=0
+          run_id=
           for attempt in $(seq 1 160); do
-            gh api repos/qingtiandamowang/istoreos/actions/runs/39817221214 > build-status.json
-            test "$(jq -r .head_sha build-status.json)" = ea5523e3194c3f25f50905cf3d599a992fa166af
-            test "$(jq -r .head_branch build-status.json)" = codex/pw2-compat-probe-20261023
-            status=$(jq -r .status build-status.json)
-            if [ "$status" = completed ]; then
-              test "$(jq -r .conclusion build-status.json)" = success || {
-                echo 'Compatibility build failed: no packages may be produced.' >&2
-                exit 1
-              }
-              ready=1
-              break
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pw2-compat-probe.yml/runs" \
+              -f branch=codex/pw2-compat-probe-20261023 -f head_sha="$GITHUB_SHA" -f per_page=10 > build-status.json
+            run_id=$(jq -r --arg sha "$GITHUB_SHA" \
+              '[.workflow_runs[] | select(.head_sha==$sha and .head_branch=="codex/pw2-compat-probe-20261023")] | sort_by(.run_number) | last | .id // empty' build-status.json)
+            if [ -n "$run_id" ]; then
+              status=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id==$id) | .status' build-status.json)
+              if [ "$status" = completed ]; then
+                conclusion=$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id==$id) | .conclusion' build-status.json)
+                test "$conclusion" = success || {
+                  echo 'Compatibility build failed: no packages may be produced.' >&2
+                  exit 1
+                }
+                ready=1
+                break
+              fi
             fi
             if [ $((attempt % 5)) -eq 1 ]; then
-              echo 'Waiting for the pinned compatibility proof; no installation/deployment.'
+              echo 'Waiting for this commit’s pinned offline compatibility proof; no deployment.'
             fi
             sleep 60
           done
           test "$ready" -eq 1
-          gh run download 39817221214 --repo qingtiandamowang/istoreos \
+          printf '%s\n' "$run_id" > compatibility-run-id.txt
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
             --name pw2-compatibility-proof-20261023 --dir proof
           test -f proof/OFFLINE-ONLY.txt
           test -f proof/module-probe/RESULT.txt
