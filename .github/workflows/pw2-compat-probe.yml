@@ -1,0 +1,115 @@
+name: PW2 compatibility probe (NO FLASH)
+
+on:
+  push:
+    branches: [codex/pw2-compat-probe-20261023]
+    paths:
+      - '.github/workflows/pw2-compat-probe.yml'
+      - '.github/scripts/pw2-compat/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pw2-compat-probe-20261023
+  cancel-in-progress: false
+
+jobs:
+  offline-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      TZ: Asia/Shanghai
+      JOBS: '2'
+    steps:
+      - name: Checkout probe controls
+        uses: actions/checkout@v4
+        with:
+          path: control
+          sparse-checkout: .github/scripts/pw2-compat
+          persist-credentials: false
+
+      - name: Checkout exact original source (not latest upstream)
+        uses: actions/checkout@v4
+        with:
+          ref: 130d1ed6577e15aa379884b1a43bc6f53574cfe1
+          path: source
+          persist-credentials: false
+
+      - name: Download original public build audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 38048987899 --repo qingtiandamowang/istoreos \
+            --name firmware-build-audit --dir baseline
+          python3 control/.github/scripts/pw2-compat/restore-baseline.py --self-test
+          python3 control/.github/scripts/pw2-compat/restore-baseline.py \
+            --source source --audit baseline --proof proof
+
+      - name: Prepare disposable Linux runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev pahole llvm python3 python3-pip \
+            python3-setuptools python3-dev rsync unzip zlib1g-dev file wget curl jq \
+            subversion patch vim-common quilt asciidoc autoconf automake \
+            libtool-bin ccache libltdl-dev libglib2.0-dev libgmp-dev \
+            libmpfr-dev libmpc-dev libelf-dev zstd binutils squashfs-tools
+          df -h .
+          free -h
+
+      - name: Restore exact feeds and archived Honk parsing metadata
+        working-directory: source
+        run: |
+          ./scripts/feeds update -a
+          install -m0644 ../baseline/honk-stage.mk feeds/honk/honk/generated-stage.mk
+          install -m0644 ../baseline/honk-provenance.json feeds/honk/honk/generated-provenance.json
+          ./scripts/feeds install -a
+          make defconfig
+          ./scripts/diffconfig.sh > ../proof/baseline-openwrt.diffconfig
+
+      - name: Rebuild original toolchain and original kernel baseline
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j2 tools/install V=s 2>&1 | tee ../proof/tools.log
+          make -j2 toolchain/install V=s 2>&1 | tee ../proof/toolchain.log
+          make -j2 target/linux/compile V=s 2>&1 | tee ../proof/kernel-baseline.log
+
+      - name: Compile six external modules only if original config and live BTF match
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t kernels < <(find "$PWD/build_dir" -type f -path '*/linux-6.12.94/Module.symvers')
+          test "${#kernels[@]}" -eq 1
+          kernel=${kernels[0]%/Module.symvers}
+          mapfile -t compilers < <(find "$PWD/staging_dir" \( -type f -o -type l \) -path '*/bin/aarch64-openwrt-linux-musl-gcc')
+          test "${#compilers[@]}" -eq 1
+          cross=${compilers[0]%gcc}
+          bash ../control/.github/scripts/pw2-compat/build-compat-modules.sh \
+            "$kernel" "$GITHUB_WORKSPACE/proof/module-probe" "$cross" 2
+
+      - name: Compile nftset-only DNS userspace without conntrack kernel changes
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp ../baseline/openwrt.config .config
+          bash ../control/.github/scripts/pw2-compat/build-dnsmasq-nftset.sh \
+            "$PWD" "$GITHUB_WORKSPACE/baseline" "$GITHUB_WORKSPACE/proof/dnsmasq-probe"
+          printf '%s\n' 'OFFLINE BUILD COMPLETE - NOT INSTALLED OR RUNTIME VALIDATED' > ../proof/OFFLINE-ONLY.txt
+
+      - name: Upload probe results only (no firmware release or deployment)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pw2-compatibility-proof-20261023
+          path: proof/
+          if-no-files-found: error
+          retention-days: 7
