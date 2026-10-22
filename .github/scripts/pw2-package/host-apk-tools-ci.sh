@@ -59,7 +59,9 @@ PKG="$TEST/host-signing-probe-1-r0.apk"
 "$APK" mkpkg --sign-key "$KEY" --files "$TEST/payload" --output "$PKG" \
     --info name:host-signing-probe --info version:1-r0 --info arch:noarch \
     --info 'description:Disposable host APK signing self-test'
-"$APK" --keys-dir "$TEST/keys" adbsign --reset-signatures --sign-key "$KEY" "$PKG"
+# mkpkg above already signs this package. Do not redundantly re-sign it:
+# upstream 3.0.5 adbsign parses input with ac->trust before loading keys-dir.
+# The separate packaging step signs only its locally built unsigned DNS input.
 "$APK" --keys-dir "$TEST/keys" verify "$PKG"
 if "$APK" --keys-dir "$TEST/empty-keys" verify "$PKG" > "$TEST/untrusted.log" 2>&1; then
     die 'signature check unexpectedly accepts an untrusted key'
