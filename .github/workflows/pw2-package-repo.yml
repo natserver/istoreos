@@ -1,0 +1,93 @@
+name: Package verified PW2 components (NO DEPLOY)
+
+on:
+  push:
+    branches: [codex/pw2-compat-probe-20261023]
+    paths:
+      - '.github/workflows/pw2-package-repo.yml'
+      - '.github/scripts/pw2-package/**'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pw2-package-repo-20261023
+  cancel-in-progress: false
+
+jobs:
+  package-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      TZ: Asia/Shanghai
+    steps:
+      - name: Checkout packaging controls only
+        uses: actions/checkout@v4
+        with:
+          path: control
+          sparse-checkout: .github/scripts/pw2-package
+          persist-credentials: false
+
+      - name: Await the exact offline compatibility build, never an unverified artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=0
+          for attempt in $(seq 1 160); do
+            gh api repos/qingtiandamowang/istoreos/actions/runs/39817221214 > build-status.json
+            test "$(jq -r .head_sha build-status.json)" = ea5523e3194c3f25f50905cf3d599a992fa166af
+            test "$(jq -r .head_branch build-status.json)" = codex/pw2-compat-probe-20261023
+            status=$(jq -r .status build-status.json)
+            if [ "$status" = completed ]; then
+              test "$(jq -r .conclusion build-status.json)" = success || {
+                echo 'Compatibility build failed: no packages may be produced.' >&2
+                exit 1
+              }
+              ready=1
+              break
+            fi
+            if [ $((attempt % 5)) -eq 1 ]; then
+              echo 'Waiting for the pinned compatibility proof; no installation/deployment.'
+            fi
+            sleep 60
+          done
+          test "$ready" -eq 1
+          gh run download 39817221214 --repo qingtiandamowang/istoreos \
+            --name pw2-compatibility-proof-20261023 --dir proof
+          test -f proof/OFFLINE-ONLY.txt
+          test -f proof/module-probe/RESULT.txt
+          test -f proof/dnsmasq-probe/SHA256SUMS
+
+      - name: Build and self-test full upstream host APK3 tools
+        run: |
+          bash control/.github/scripts/pw2-package/host-apk-tools-ci.sh "$GITHUB_WORKSPACE/apk-host"
+
+      - name: Create signed component packages and signed local repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/.github/scripts/pw2-package/package-compat-repo.sh --self-test
+          sudo -n bash "$GITHUB_WORKSPACE/control/.github/scripts/pw2-package/package-compat-repo.sh" \
+            --apk "$GITHUB_WORKSPACE/apk-host/bin/apk" \
+            --proof "$GITHUB_WORKSPACE/proof" \
+            --out "$GITHUB_WORKSPACE/packages-repo"
+
+      - name: Upload public packages, proof and public key only (never signing private key)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pw2-signed-components-20261023
+          path: |
+            packages-repo/repo/*.apk
+            packages-repo/repo/packages.adb
+            packages-repo/pw2-compat-public.pem
+            packages-repo/proof.json
+            packages-repo/SHA256SUMS
+            packages-repo/pw2-compat-signed-repo.tar.gz
+            apk-host/provenance.txt
+            apk-host/RESULT.txt
+          if-no-files-found: error
+          retention-days: 7
