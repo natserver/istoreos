@@ -29,6 +29,10 @@ jobs:
           sparse-checkout: .github/scripts/pw2-package
           persist-credentials: false
 
+      - name: Build and self-test full upstream host APK3 tools in parallel with kernel build
+        run: |
+          bash control/.github/scripts/pw2-package/host-apk-tools-ci.sh "$GITHUB_WORKSPACE/apk-host"
+
       - name: Await the exact offline compatibility build, never an unverified artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -61,10 +65,6 @@ jobs:
           test -f proof/module-probe/RESULT.txt
           test -f proof/dnsmasq-probe/SHA256SUMS
 
-      - name: Build and self-test full upstream host APK3 tools
-        run: |
-          bash control/.github/scripts/pw2-package/host-apk-tools-ci.sh "$GITHUB_WORKSPACE/apk-host"
-
       - name: Create signed component packages and signed local repository
         shell: bash
         run: |
@@ -90,4 +90,18 @@ jobs:
             apk-host/provenance.txt
             apk-host/RESULT.txt
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload public host-tool diagnostics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pw2-host-tool-diagnostics-20261023
+          path: |
+            apk-host/provenance.txt
+            apk-host/RESULT.txt
+            apk-host/version.txt
+            apk-host/applets.txt
+            apk-host/selftest/*.log
+          if-no-files-found: warn
           retention-days: 7
