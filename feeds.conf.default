@@ -1,3 +1,5 @@
+# Honk feed: immutable revision; no subscriptions or device credentials.
+src-git honk https://github.com/kenzok8/openwrt-honk.git^a8e3fb100598376385f99af85814e8cb7dd04406
 src-git packages https://github.com/jjm2473/packages.git;istoreos-25.12
 src-git luci https://github.com/jjm2473/luci.git;istoreos-25.12
 src-git routing https://github.com/openwrt/routing.git;openwrt-25.12

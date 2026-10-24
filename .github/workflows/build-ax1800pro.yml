@@ -2,6 +2,12 @@ name: Build iStoreOS for JDCloud AX1800 Pro (RE-SS-01)
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a public firmware release (leave disabled for this build)"
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - 'sync/**'
@@ -10,6 +16,7 @@ on:
       - 'target/linux/qualcommax/**'
       - 'package/**'
       - '.github/workflows/build-ax1800pro.yml'
+      - '.github/scripts/**'
 
 env:
   DEVICE_TARGET: qualcommax/ipq60xx
@@ -29,6 +36,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: 守卫离线回归检查 (Guard regression check)
+        run: python3 .github/scripts/test-verify-proxy-firmware.py
 
       - name: 规范化 vendored 包行尾 (Normalize vendored line endings)
         run: |
@@ -112,17 +122,54 @@ jobs:
             python3-setuptools python3-dev rsync unzip zlib1g-dev file wget \
             subversion patch vim-common quilt asciidoc autoconf automake \
             libtool-bin ccache libltdl-dev libglib2.0-dev libgmp-dev \
-            libmpfr-dev libmpc-dev libelf-dev zstd
+            libmpfr-dev libmpc-dev libelf-dev zstd binutils squashfs-tools
           sudo apt-get clean
 
       - name: 更新/安装 Feeds
         run: |
           ./scripts/feeds update -a
+          # The pinned Honk feed needs generated staging metadata. Fixed hashes
+          # fail closed if the mutable staging release changes; never use SKIP.
+          HONK_STAGE=https://github.com/kenzok8/openwrt-honk/releases/download/staging
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            "$HONK_STAGE/generated-stage.mk" -o feeds/honk/honk/generated-stage.mk
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            "$HONK_STAGE/generated-provenance.json" -o feeds/honk/honk/generated-provenance.json
+          printf '%s\n' \
+            '78d4364e6c2dbe03ec49db542b4d4c4af5d8ca5755cf76e4af76a6497f903346  feeds/honk/honk/generated-stage.mk' \
+            '575dd177ddf027d1af1432199746d2ada085ee4d767e1479cbf4319bb2fe12e8  feeds/honk/honk/generated-provenance.json' \
+            | sha256sum --check --strict
+          grep -Eq '^HONK_HASH_AARCH64[[:space:]]*[?:]?=[[:space:]]*33acdc1b62678e61842c9e09dee3683e2d519d5f301ae62c161e82f2c9a936cb[[:space:]]*$' \
+            feeds/honk/honk/generated-stage.mk
+          grep -Fq 'eac5e0c5fba5078a7ff4517a3e3851e7fa0f4f8e' feeds/honk/honk/generated-provenance.json
+          mkdir -p firmware-audit
+          : > firmware-audit/feeds-commits.tsv
+          for feed in feeds/*; do
+            [ -d "$feed/.git" ] || continue
+            printf '%s\t%s\n' "${feed##*/}" "$(git -C "$feed" rev-parse HEAD)" \
+              >> firmware-audit/feeds-commits.tsv
+          done
           ./scripts/feeds install -a
           echo "::group::store feed（iStore 应用商店本体）是否已注册"
           ./scripts/feeds list -n 2>/dev/null | grep -E '^(luci-app-store|taskd|luci-lib-taskd|luci-lib-xterm)$' || \
             echo "警告：store feed 中的包未列出"
           echo "::endgroup::"
+
+      - name: Honk 预装但默认关闭 (No automatic network takeover)
+        run: |
+          mkdir -p files/etc/uci-defaults
+          cat > files/etc/uci-defaults/zz-honk-preinstalled-disabled <<'EOF'
+          #!/bin/sh
+          # Only Honk activation flags; no interface, DNS, credential or subscription changes.
+          if uci -q get honk.main >/dev/null; then
+            uci -q set honk.main.enabled='0'
+            uci -q set honk.main.boot_enabled='0'
+            uci -q commit honk
+          fi
+          /etc/init.d/honk disable
+          exit 0
+          EOF
+          chmod 0755 files/etc/uci-defaults/zz-honk-preinstalled-disabled
 
       - name: 生成 seed 配置 (Generate .config)
         run: |
@@ -271,6 +318,8 @@ jobs:
           CONFIG_DEVEL=y
           CONFIG_BPF_TOOLCHAIN_HOST=y
           CONFIG_KERNEL_DEBUG_INFO=y
+          # BTF depends on !DEBUG_INFO_REDUCED, whose default is y.
+          # CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set
           CONFIG_KERNEL_DEBUG_INFO_BTF=y
           CONFIG_KERNEL_CGROUPS=y
           CONFIG_KERNEL_CGROUP_BPF=y
@@ -294,11 +343,40 @@ jobs:
           # 所以只能像这样编进固件，没有「下载安装包单独装」这条路。
           # ===============================================================
           CONFIG_PACKAGE_kmod-tun=y
+
+          # K. Honk + Doona/LuCI, with nftables NFQUEUE and BPF prerequisites.
+          CONFIG_PACKAGE_honk=y
+          CONFIG_PACKAGE_luci-app-honk=y
+          CONFIG_PACKAGE_kmod-nft-queue=y
+          CONFIG_PACKAGE_kmod-nfnetlink-queue=y
+
+          # L. PassWall2 transparent-proxy kernel support. These options are
+          # deliberately built into this matching firmware; external kmods cannot
+          # add UDP socket lookup exports omitted from the current running kernel.
+          CONFIG_PACKAGE_kmod-nf-socket=y
+          CONFIG_PACKAGE_kmod-nf-tproxy=y
+          CONFIG_PACKAGE_kmod-nft-socket=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          # CONFIG_PACKAGE_dnsmasq is not set
+          # CONFIG_PACKAGE_dnsmasq-dhcpv6 is not set
+          CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_dnsmasq_full_dhcp=y
+          # CONFIG_PACKAGE_dnsmasq_full_dhcpv6 is not set
+          # CONFIG_PACKAGE_dnsmasq_full_dnssec is not set
+          # CONFIG_PACKAGE_dnsmasq_full_auth is not set
+          # CONFIG_PACKAGE_dnsmasq_full_ipset is not set
+          CONFIG_PACKAGE_dnsmasq_full_nftset=y
+          # CONFIG_PACKAGE_dnsmasq_full_conntrack is not set
+          # CONFIG_PACKAGE_dnsmasq_full_broken_rtc is not set
+          CONFIG_PACKAGE_dnsmasq_full_noid=y
+          CONFIG_PACKAGE_dnsmasq_full_tftp=y
+
           EOF
 
       - name: 展开默认配置并校验机型 (defconfig + verify)
         run: |
           make defconfig
+          bash .github/scripts/verify-proxy-firmware.sh defconfig
           echo "::group::最终生效的机型相关配置"
           grep -E '^CONFIG_TARGET_(BOARD|SUBTARGET|PROFILE)|DEVICE_jdcloud' .config || true
           echo "::endgroup::"
@@ -463,6 +541,9 @@ jobs:
           fi
           echo "TUN 支持校验通过：kmod-tun 已入固件"
 
+      - name: 内核与代理硬校验 (BTF, NFQUEUE, 12 MiB, defaults, audit)
+        run: bash .github/scripts/verify-proxy-firmware.sh final
+
       - name: 校验服务自启 (Verify services are enabled at first boot)
         run: |
           # manifest 只证明「包被装了」，不证明「服务能跑起来」。
@@ -499,17 +580,9 @@ jobs:
           fi
 
           WORK=$(mktemp -d)
-          SQ="$IMG"
-          # 镜像前段是 kernel，rootfs(squashfs) 在后面，按魔数定位
-          if ! unsquashfs -s "$SQ" >/dev/null 2>&1; then
-            OFFSET=$(grep -abo 'hsqs' "$IMG" | head -1 | cut -d: -f1)
-            echo "squashfs 偏移: ${OFFSET:-未找到}"
-            if [ -n "$OFFSET" ]; then
-              # 用 tail 截取，避免 dd bs=1 逐字节读 100MB 慢得离谱
-              tail -c +$((OFFSET + 1)) "$IMG" > "$WORK/root.sqsh"
-              SQ="$WORK/root.sqsh"
-            fi
-          fi
+          SQ="$WORK/root.squashfs"
+          # This eMMC sysupgrade is a tar, not a raw kernel+rootfs image.
+          tar -xOf "$IMG" sysupgrade-jdcloud_re-ss-01/root > "$SQ"
 
           LIST="$WORK/list.txt"
           unsquashfs -l "$SQ" 2>/dev/null \
@@ -677,12 +750,22 @@ jobs:
 
       - name: 上传固件 (Upload firmware)
         uses: actions/upload-artifact@v4
-        if: always()
+        if: success()
         with:
           name: istoreos-jdcloud-re-ss-01
           path: |
             bin/targets/qualcommax/ipq60xx/*.bin
             bin/targets/qualcommax/ipq60xx/*.manifest
+            bin/targets/qualcommax/ipq60xx/SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: 上传最终配置与验收审计 (Upload build audit)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: firmware-build-audit
+          path: firmware-audit/
           if-no-files-found: warn
           retention-days: 30
 
@@ -693,17 +776,17 @@ jobs:
           name: build-log
           path: build.log
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 30
 
       - name: 生成 GMT+8 时间戳 (Generate release timestamp)
         id: ts
-        if: success()
+        if: success() && (github.event_name != 'workflow_dispatch' || inputs.publish_release)
         run: |
           echo "tag=rel-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
           echo "human=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> "$GITHUB_OUTPUT"
 
       - name: 生成发布说明 (Generate release notes)
-        if: success()
+        if: success() && (github.event_name != 'workflow_dispatch' || inputs.publish_release)
         run: |
           # Release 说明由「提交信息里的两个标记块」自动生成，不需要人工维护：
           #   <!-- CHANGELOG-START --> … <!-- CHANGELOG-END -->       本次改了什么
@@ -744,6 +827,9 @@ jobs:
             echo
             echo "- TUN/TAP 虚拟网卡（kmod-tun）：TUN 模式代理可直接使用"
             echo "- daed 底层内核支持（BTF / XDP / BPF），daed 本体刷机后自行安装"
+            echo "- Honk + Doona/LuCI 已预装，默认关闭；不包含用户订阅、账号或网络配置"
+            echo "- BTF 实际 ELF 段、NFQUEUE、最终 sysupgrade 内核 <= 12 MiB 已通过硬校验"
+            echo "- 附最终 OpenWrt/内核配置、来源版本、SHA256SUMS 与验收审计；未更改设备分区或 U-Boot"
             echo
             echo "### 刷机"
             echo
@@ -754,7 +840,7 @@ jobs:
           echo "::endgroup::"
 
       - name: 发布 Release (Publish release on build success)
-        if: success()
+        if: success() && (github.event_name != 'workflow_dispatch' || inputs.publish_release)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ts.outputs.tag }}
@@ -768,6 +854,8 @@ jobs:
           files: |
             bin/targets/qualcommax/ipq60xx/*.bin
             bin/targets/qualcommax/ipq60xx/*.manifest
+            bin/targets/qualcommax/ipq60xx/SHA256SUMS
+            firmware-audit/*
           # 正文由上一步「生成发布说明」产出（含 本次更新 / 官方 iStoreOS 更新内容）
           body_path: release-body.md
         env:

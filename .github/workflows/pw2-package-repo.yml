@@ -1,0 +1,116 @@
+name: Package verified PW2 components (NO DEPLOY)
+
+on:
+  push:
+    branches: [codex/pw2-compat-probe-20261023]
+    paths:
+      - '.github/workflows/pw2-package-repo.yml'
+      - '.github/scripts/pw2-package/**'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: pw2-package-repo-20261023
+  cancel-in-progress: false
+
+jobs:
+  package-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      TZ: Asia/Shanghai
+    steps:
+      - name: Checkout packaging controls only
+        uses: actions/checkout@v4
+        with:
+          path: control
+          sparse-checkout: .github/scripts/pw2-package
+          persist-credentials: false
+
+      - name: Build and self-test full upstream host APK3 tools in parallel with kernel build
+        run: |
+          bash control/.github/scripts/pw2-package/host-apk-tools-ci.sh "$GITHUB_WORKSPACE/apk-host"
+
+      - name: Await the exact offline compatibility build, never an unverified artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=0
+          run_id=
+          compat_sha=b291b8a8bf10930cd256aa975505aff65152ecd1
+          for attempt in $(seq 1 160); do
+            gh run list --repo "$GITHUB_REPOSITORY" \
+              --branch codex/pw2-compat-probe-20261023 \
+              --commit "$compat_sha" --workflow 'PW2 compatibility probe (NO FLASH)' \
+              --limit 10 --json databaseId,status,conclusion,headSha > build-status.json
+            run_id=$(jq -r --arg sha "$compat_sha" \
+              '[.[] | select(.headSha==$sha)] | sort_by(.databaseId) | last | .databaseId // empty' build-status.json)
+            if [ -n "$run_id" ]; then
+              status=$(jq -r --argjson id "$run_id" '.[] | select(.databaseId==$id) | .status' build-status.json)
+              if [ "$status" = completed ]; then
+                conclusion=$(jq -r --argjson id "$run_id" '.[] | select(.databaseId==$id) | .conclusion' build-status.json)
+                test "$conclusion" = success || {
+                  echo 'Compatibility build failed: no packages may be produced.' >&2
+                  exit 1
+                }
+                ready=1
+                break
+              fi
+            fi
+            if [ $((attempt % 5)) -eq 1 ]; then
+              echo 'Waiting for the pinned offline compatibility proof; no deployment.'
+            fi
+            sleep 60
+          done
+          test "$ready" -eq 1
+          printf '%s\n' "$run_id" > compatibility-run-id.txt
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+            --name pw2-compatibility-proof-20261023 --dir proof
+          test -f proof/OFFLINE-ONLY.txt
+          test -f proof/module-probe/RESULT.txt
+          test -f proof/dnsmasq-probe/SHA256SUMS
+
+      - name: Create signed component packages and signed local repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/.github/scripts/pw2-package/package-compat-repo.sh --self-test
+          sudo -n bash "$GITHUB_WORKSPACE/control/.github/scripts/pw2-package/package-compat-repo.sh" \
+            --apk "$GITHUB_WORKSPACE/apk-host/bin/apk" \
+            --proof "$GITHUB_WORKSPACE/proof" \
+            --out "$GITHUB_WORKSPACE/packages-repo"
+
+      - name: Upload public packages, proof and public key only (never signing private key)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pw2-signed-components-20261023
+          path: |
+            packages-repo/repo/*.apk
+            packages-repo/repo/packages.adb
+            packages-repo/pw2-compat-public.pem
+            packages-repo/proof.json
+            packages-repo/SHA256SUMS
+            packages-repo/pw2-compat-signed-repo.tar.gz
+            apk-host/provenance.txt
+            apk-host/RESULT.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload public host-tool diagnostics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pw2-host-tool-diagnostics-20261023
+          path: |
+            apk-host/provenance.txt
+            apk-host/RESULT.txt
+            apk-host/version.txt
+            apk-host/applets.txt
+            apk-host/selftest/*.log
+          if-no-files-found: warn
+          retention-days: 7
