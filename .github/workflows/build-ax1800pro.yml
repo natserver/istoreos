@@ -136,10 +136,10 @@ jobs:
           curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
             "$HONK_STAGE/generated-provenance.json" -o feeds/honk/honk/generated-provenance.json
           printf '%s\n' \
-            '8c6dc41c59f72052cecc9aa6e114742d010aebdcf016cf2ab75571e037472173  feeds/honk/honk/generated-stage.mk' \
+            '78d4364e6c2dbe03ec49db542b4d4c4af5d8ca5755cf76e4af76a6497f903346  feeds/honk/honk/generated-stage.mk' \
             '575dd177ddf027d1af1432199746d2ada085ee4d767e1479cbf4319bb2fe12e8  feeds/honk/honk/generated-provenance.json' \
             | sha256sum --check --strict
-          grep -Eq '^HONK_HASH_AARCH64[[:space:]]*[?:]?=[[:space:]]*bb322b1ab3e89f338a241c7dee02a7406ed0fcbe0e25b9929613ceb2a193f9b2[[:space:]]*$' \
+          grep -Eq '^HONK_HASH_AARCH64[[:space:]]*[?:]?=[[:space:]]*33acdc1b62678e61842c9e09dee3683e2d519d5f301ae62c161e82f2c9a936cb[[:space:]]*$' \
             feeds/honk/honk/generated-stage.mk
           grep -Fq 'eac5e0c5fba5078a7ff4517a3e3851e7fa0f4f8e' feeds/honk/honk/generated-provenance.json
           mkdir -p firmware-audit
