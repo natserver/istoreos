@@ -1,0 +1,17 @@
+#!/bin/sh
+# 亚瑟 AX1800 Pro 用的是自定义内核配置，内核 ABI 哈希与上游 kmods 仓库对不上，
+# 因此 distfeeds.list 里那条 .../kmods/<hash>/packages.adb 必然 404。
+#
+# apk 的规则是：只要有任意一个源更新失败，`apk update` 就返回非 0。
+# 而市面上的 .run 安装包（Nikki / PassWall / OpenClash ...）第一步几乎都是
+# `apk update`，一旦返回非 0 就直接打印「更新软件源列表错误」并中止安装 ——
+# 这就是明明依赖都编进固件了、.run 却仍然装不上的真正原因。
+#
+# 本固件的 kmod 全部随镜像编入；外部预编译 kmod 因内核哈希不一致本来也装不上，
+# 所以这条源留着只有害处。这里把它注释掉，让 apk update 恢复返回 0。
+F=/etc/apk/repositories.d/distfeeds.list
+
+if [ -f "$F" ] && grep -qE '^[^#].*/kmods/' "$F"; then
+	sed -i -E 's#^([^#].*/kmods/.*)$#\#\1#' "$F"
+	logger -t apk-repo "custom kernel: disabled mismatched kmods feed"
+fi
