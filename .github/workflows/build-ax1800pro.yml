@@ -294,6 +294,26 @@ jobs:
           # 所以只能像这样编进固件，没有「下载安装包单独装」这条路。
           # ===============================================================
           CONFIG_PACKAGE_kmod-tun=y
+
+          # ===============================================================
+          # K. Nikki（Mihomo 内核）透明代理依赖
+          # Nikki 的 .run 安装包自带 mihomo 内核与 nikki / luci 本体，但**不含**
+          # 下面这些依赖；apk add 会去远端源补齐，而自定义内核的 kmod 在官方源里
+          # 对不上（内核哈希不同），于是安装直接失败。
+          # 所以只能编进固件：
+          #   kmod-inet-diag  → ss / 连接诊断（Nikki 读取连接状态）
+          #   kmod-nft-socket → nftables socket 匹配（分流规则）
+          #   kmod-nft-tproxy → nftables tproxy 重定向（TProxy 模式）
+          #   yq              → 读写 mixin.yaml（Go 静态二进制，无运行期依赖）
+          # kmod-nf-socket / kmod-nf-tproxy 是上面两个的硬依赖，显式列出，
+          # 避免 defconfig 因「依赖不满足」把它们静默丢弃。
+          # ===============================================================
+          CONFIG_PACKAGE_kmod-inet-diag=y
+          CONFIG_PACKAGE_kmod-nft-socket=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-nf-socket=y
+          CONFIG_PACKAGE_kmod-nf-tproxy=y
+          CONFIG_PACKAGE_yq=y
           EOF
 
       - name: 展开默认配置并校验机型 (defconfig + verify)
@@ -363,8 +383,15 @@ jobs:
           samba4-server
           minidlna
           "
+          NIKKI="
+          kmod-inet-diag
+          kmod-nft-socket
+          kmod-nft-tproxy
+          yq
+          "
 
           : > /tmp/missing_hard
+          : > /tmp/missing_nikki
           : > /tmp/missing_soft
 
           check_group() {
@@ -386,6 +413,7 @@ jobs:
 
           check_group "关键界面栈（缺失即失败）" /tmp/missing_hard $HARD
           check_group "可选增强组件（缺失仅警告）" /tmp/missing_soft $SOFT
+          check_group "Nikki 依赖（缺失即失败）" /tmp/missing_nikki $NIKKI
 
           WARN_ONLY=$(tr '\n' ' ' < /tmp/missing_soft | sed 's/  */ /g;s/^ //;s/ $//')
           HARD_FAIL=$(tr '\n' ' ' < /tmp/missing_hard | sed 's/  */ /g;s/^ //;s/ $//')
@@ -404,7 +432,14 @@ jobs:
             echo "::endgroup::"
             exit 1
           fi
+          NIKKI_FAIL=$(tr '\n' ' ' < /tmp/missing_nikki | sed 's/  */ /g;s/^ //;s/ $//')
+          if [ -n "$NIKKI_FAIL" ]; then
+            echo "::error::Nikki 依赖在 defconfig 后丢失（这些包不在 feeds 或包名有误）: $NIKKI_FAIL"
+            exit 1
+          fi
+
           echo "关键界面栈全部就位，完整版界面可以成型"
+          echo "Nikki 依赖全部就位（kmod-inet-diag / kmod-nft-socket / kmod-nft-tproxy / yq）"
 
       - name: 预下载源码包 (make download)
         run: |
@@ -462,6 +497,15 @@ jobs:
             exit 1
           fi
           echo "TUN 支持校验通过：kmod-tun 已入固件"
+
+          # Nikki 依赖必须齐全：缺任一 kmod，用户的 .run 包都会因依赖不满足装不上
+          for pkg in kmod-inet-diag kmod-nft-socket kmod-nft-tproxy yq; do
+            if ! grep -q "^${pkg} " "$MANIFEST"; then
+              echo "::error::manifest 中没有 ${pkg}，Nikki 的 .run 安装包将无法安装"
+              exit 1
+            fi
+          done
+          echo "Nikki 依赖校验通过：kmod-inet-diag / kmod-nft-socket / kmod-nft-tproxy / yq 均已入固件"
 
       - name: 校验服务自启 (Verify services are enabled at first boot)
         run: |
@@ -744,6 +788,7 @@ jobs:
             echo
             echo "- TUN/TAP 虚拟网卡（kmod-tun）：TUN 模式代理可直接使用"
             echo "- daed 底层内核支持（BTF / XDP / BPF），daed 本体刷机后自行安装"
+            echo "- Nikki（Mihomo）透明代理依赖：kmod-inet-diag / kmod-nft-socket / kmod-nft-tproxy + yq"
             echo
             echo "### 刷机"
             echo
