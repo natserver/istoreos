@@ -314,6 +314,7 @@ jobs:
           CONFIG_PACKAGE_kmod-nf-socket=y
           CONFIG_PACKAGE_kmod-nf-tproxy=y
           CONFIG_PACKAGE_yq=y
+          CONFIG_PACKAGE_kmod-nfnetlink=y
           EOF
 
       - name: 展开默认配置并校验机型 (defconfig + verify)
