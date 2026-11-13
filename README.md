@@ -31,7 +31,7 @@
 | 文件 | 下载 |
 | --- | --- |
 | 12M 大分区 U-Boot（jdcloud_re-ss-01） | [直接下载 .bin](https://github.com/chenxin527/uboot-qsdk12.5-build/releases/download/26.08.16-14.22.36-3011049/uboot-ipq60xx-jdcloud_re-ss-01-260816_142236_3011049.bin) |
-| GPT 模板（rootfs2048M / HLOS12M） | [直接下载 .bin](https://github.com/GHNERCH/DAEWRT-AX1800PRO/raw/main/gpt-JDC_AX1800_Pro_dual-boot_rootfs2048M_HLOS12M_no-last-partition.bin) |
+| GPT 模板（rootfs2048M / HLOS12M） | [直接下载 .bin](https://github.com/natserver/istoreos/raw/refs/heads/sync/istoreos-25.12-20260910/docs/gpt-JDC_AX1800_Pro_dual-boot_rootfs2048M_HLOS12M_no-last-partition.bin) |
 
 ### U-Boot 版本说明
 
