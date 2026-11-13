@@ -64,6 +64,11 @@ HOST_LN="$(subst ${STAGING_DIR_HOST},$${STAGING_DIR_HOST},$(LN))"
 	}
 	$${HOST_SED} 's,^src/gz istoreos_,src/gz openwrt_,g' -e '/^src\/gz openwrt_\(core\|base\|kmods\|luci\|packages\|routing\|telephony\) /!d' "$${IPKG_INSTROOT}/etc/opkg/distfeeds.conf"
 	$${HOST_SED} '\#/\(base\|kmods/.*\|luci\|packages\|routing\|telephony\|video\)/packages\.adb$$#!d' "$${IPKG_INSTROOT}/etc/apk/repositories.d/distfeeds.list"
+	# 亚瑟 AX1800 Pro 使用自定义内核，kmods 源目录名带内核 ABI 哈希，
+	# 与上游官方 kmods 仓库对不上，请求必然 404；而 apk update 只要有
+	# 任意一个源失败就返回非 0，会让所有 .run 安装包在第一步直接中止。
+	# kmod 已全部随镜像编入，这条源留着只有害处，构建时直接删掉。
+	$${HOST_SED} -i '\#/kmods/#d' "$${IPKG_INSTROOT}/etc/apk/repositories.d/distfeeds.list"
 
 	$${HOST_SED} 's/"192.168.1.1"/"192.168.100.1"/' \
 		"$${IPKG_INSTROOT}/usr/lib/lua/luci/controller/admin/system.lua" \
