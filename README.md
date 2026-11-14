@@ -16,7 +16,7 @@
 
 ## 内置软件
 
-- **eBPF / BTF 内核支持**：已开启 BTF、XDP、BPF Events、CGROUPS、BPF 工具链，并内置 daed 所需内核模块（kmod-sched-core / kmod-sched-bpf / kmod-veth / kmod-xdp-sockets-diag）；
+- **eBPF / BTF 内核支持**：已开启 BTF、XDP、BPF Events、CGROUPS、BPF 工具链，并内置 eBPF 透明代理（daed / honk）所需内核模块（kmod-sched-core / kmod-sched-bpf / kmod-veth / kmod-xdp-sockets-diag）；
 - **TUN/TAP 虚拟网卡（kmod-tun）**：TUN 模式代理可直接使用。
 
 ## 刷机流程
