@@ -61,15 +61,15 @@
   - 精简部分机型包含的额外 DTB，减小 U-Boot 大小。
 <!-- UBOOT-NOTES-END -->
 
-## 安装加强版 daed（大鹅）
+## 安装 honk
 
-国内网络复制链接一键安装：
+基于 eBPF 的透明代理引擎（dae 兼容），自带 LuCI 管理界面，菜单在 **服务 → HONK**。国内网络复制链接一键安装：
 
 ```sh
-wget --no-check-certificate -O - https://ghfast.top/https://raw.githubusercontent.com/kenzok8/openwrt-daede/refs/heads/main/scripts/install.sh | ash
+wget --no-check-certificate -O - https://ghfast.top/https://raw.githubusercontent.com/189160/luci-app-honk/main/Auto_Install_Script.sh | sh -s luci-app-honk
 ```
 
-512m内存的设备节点不要搞太多，搞太多爆内存，路由器会死掉。
+如需直连（不走加速）在命令末尾加 `--no-proxy`；只装核心不装界面用 `sh -s honk`。
 
 ## 其他翻墙插件
 
